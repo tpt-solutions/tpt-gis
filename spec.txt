@@ -1,0 +1,43 @@
+Design Document 2: tpt-gis
+A Pure Rust, Planetary-Scale Geographic Information Systems Engine
+Project: tpt-gis (Open Source)
+License: Dual MIT / Apache-2.0 (Strictly enforced, zero GPL/LGPL dependencies)
+Status: Design Phase 1.0
+Target Ecosystem: General Rust (Cloud/Backend, WebAssembly, Edge/Embedded)
+1. Executive Summary
+The GIS industry is held hostage by GDAL (Geospatial Data Abstraction Library) and PROJ. GDAL is the undisputed backbone of global mapping, autonomous vehicles, and climate science. However, it is a 30-year-old C++ monolith with a build system so complex it is considered a rite of passage of pain. Integrating GDAL into modern web backends, mobile apps, or edge devices is a nightmare of dependency management.
+tpt-gis is a pure Rust, composable geospatial engine designed to replace the GDAL/PROJ/GEOS stack. It provides zero-FFI coordinate transformations, high-performance spatial indexing, and modern cloud-native raster/vector parsing. It brings geospatial math into the modern era of memory safety, WebAssembly, and edge computing.
+2. Core Design Principles
+100% Pure Rust & Zero FFI: No wrapping GDAL. We are rewriting the core mathematical projections and geometry engines from scratch in safe Rust.
+Cloud-Native & Streaming First: Designed from day one to handle Cloud Optimized GeoTIFFs (COG) and streaming vector tiles, allowing users to query planetary-scale datasets without downloading them.
+Strict MIT/Apache-2.0: The GIS world has a history of complex licensing. tpt-gis will be strictly permissive, allowing seamless integration into commercial SaaS, autonomous vehicle stacks, and government infrastructure.
+no_std for Edge & IoT: The core math (distance, bearing, point-in-polygon) will run on bare-metal GPS trackers and drone flight controllers.
+Mathematically Rigorous: Geodesic calculations will be highly accurate, avoiding the "flat earth" approximations that plague lesser libraries.
+3. Architecture Overview
+
+tpt-gis/
+├── tpt-gis-core      # CRS definitions, datum transformations, geodesic math (no_std)
+├── tpt-gis-geom      # Vector geometry (Points, Lines, Polys), topological ops (no_std)
+├── tpt-gis-raster    # Grid data, map algebra, Cloud Optimized GeoTIFF (COG) parsing
+├── tpt-gis-io        # Parsers/writers for GeoJSON, WKB/WKT, Shapefile, GeoPackage
+└── tpt-gis-index     # R-Trees, Quadtrees, H3/S2 hexagonal grid integration
+
+4. Module Breakdown
+tpt-gis-core: The replacement for PROJ. Defines Coordinate Reference Systems (CRS), handles EPSG code lookups, and performs highly accurate geodesic transformations (e.g., WGS84 to Web Mercator, or local state planes).
+tpt-gis-geom: The replacement for GEOS. Implements OGC Simple Features. Provides topological operations: intersects, contains, union, difference, and buffer. All implemented in pure Rust with robust floating-point tolerance handling.
+tpt-gis-raster: Handles gridded data. Includes a pure Rust parser for Cloud Optimized GeoTIFFs (COG) allowing HTTP Range-request streaming (reading a 50GB satellite image without downloading it).
+tpt-gis-io: The data interchange layer. Blazing fast, zero-copy serialization/deserialization for GeoJSON, Well-Known Binary (WKB), and legacy ESRI Shapefiles.
+tpt-gis-index: High-performance spatial indexing. Implements R-Trees for bounding-box queries and integrates with discrete global grid systems (like Uber's H3) for hexagonal binning and spatial joins.
+5. Flagship MVPs
+MVP 1: The Planetary-Scale Spatial Join Engine (Cloud/Backend Focus)
+Target Audience: Data scientists, logistics companies, urban planners, SaaS backends.
+Objective: A CLI and library tool that ingests two massive datasets (e.g., 10 million delivery drop-off points and 50,000 city zoning polygons), reprojects them into a common CRS, and performs a spatial join (finding which points fall inside which polygons) in seconds.
+Why this proves the library: It demands massive throughput and high-performance spatial indexing (tpt-gis-index). It proves that a pure Rust GIS engine can outperform PostGIS and GDAL command-line tools for batch processing, without requiring a database server.
+MVP 2: Real-Time Drone Geofence & Navigation Engine (Edge/Embedded Focus)
+Target Audience: Drone manufacturers, robotics companies, autonomous vehicle developers.
+Objective: A no_std compatible library running on a Raspberry Pi / flight controller. It ingests a continuous stream of GPS coordinates, checks the drone's position against a complex, pre-loaded polygonal "no-fly zone" map, and calculates the exact vector heading to escape the zone if breached.
+Why this proves the library: It demands ultra-low latency, zero memory allocation, and no_std compatibility. It proves that tpt-gis-core and tpt-gis-geom can run on bare-metal hardware, replacing heavy C++ navigation stacks.
+6. Development Roadmap
+Phase 1 (Months 1-3): tpt-gis-core and tpt-gis-geom. Milestone: Release the Real-Time Drone Geofence Engine. Prove no_std viability and geodesic accuracy.
+Phase 2 (Months 4-6): tpt-gis-io and tpt-gis-index. Milestone: Release the Planetary-Scale Spatial Join Engine. Prove massive throughput and R-Tree performance.
+Phase 3 (Months 7-12): tpt-gis-raster and Cloud Optimized GeoTIFF (COG) streaming. Milestone: Full parity with basic GDAL raster operations, but with native HTTP streaming and zero C++ dependencies.
