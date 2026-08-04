@@ -1,0 +1,25 @@
+[package]
+name = "drone-geofence-demo"
+description = "MVP 2: Real-Time Drone Geofence & Navigation Engine — demo binary for tpt-gis."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+tpt-gis-core = { path = "../../tpt-gis-core" }
+tpt-gis-geom = { path = "../../tpt-gis-geom" }
+
+[dev-dependencies]
+criterion = { version = "0.5", default-features = false }
+
+[[bench]]
+name = "geofence_check"
+harness = false

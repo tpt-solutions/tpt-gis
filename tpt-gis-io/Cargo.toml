@@ -1,0 +1,13 @@
+[package]
+name = "tpt-gis-io"
+description = "Parsers and writers for GeoJSON, WKB/WKT, Shapefile, and GeoPackage for tpt-gis."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[lints]
+workspace = true

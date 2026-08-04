@@ -1,0 +1,25 @@
+[package]
+name = "tpt-gis-core"
+description = "CRS definitions, datum transformations, and geodesic math for tpt-gis. no_std by default."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+libm = { version = "0.2", default-features = false }
+serde = { version = "1", default-features = false, features = ["derive"], optional = true }
+
+[features]
+default = []
+std = []
+serde = ["dep:serde"]
+
+[dev-dependencies]
+approx = "0.5"

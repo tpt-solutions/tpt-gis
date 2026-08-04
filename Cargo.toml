@@ -1,0 +1,26 @@
+[workspace]
+resolver = "2"
+members = [
+    "tpt-gis-core",
+    "tpt-gis-geom",
+    "tpt-gis-raster",
+    "tpt-gis-io",
+    "tpt-gis-index",
+    "examples/drone-geofence-demo",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.81"
+license = "MIT OR Apache-2.0"
+authors = ["TPT Solutions"]
+repository = "https://github.com/tpt-solutions/tpt-gis"
+homepage = "https://github.com/tpt-solutions/tpt-gis"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
