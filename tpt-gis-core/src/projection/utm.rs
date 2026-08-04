@@ -196,4 +196,13 @@ mod tests {
 
         assert!((projected.x - FALSE_EASTING_M).abs() < 1e-6, "easting = {}", projected.x);
     }
+
+    #[test]
+    fn forward_matches_known_reference() {
+        let zone = Zone::containing(GeoPoint::new(40.7128, -74.0060)); // New York City, zone 18N
+        let point = GeoPoint::new(40.7128, -74.0060);
+        let projected = forward(&Ellipsoid::WGS84, point, zone);
+        assert!((projected.x - 583960.0).abs() < 10.0, "easting = {}", projected.x);
+        assert!((projected.y - 4507351.0).abs() < 10.0, "northing = {}", projected.y);
+    }
 }

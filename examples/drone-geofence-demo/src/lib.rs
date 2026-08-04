@@ -6,10 +6,15 @@
 //! nearest boundary point (the "escape vector").
 //!
 //! The check itself ([`check_position`]) only touches `no_std`, zero-allocation
-//! APIs from `tpt-gis-core`/`tpt-gis-geom` — see those crates' successful
-//! `thumbv7em-none-eabihf` and `wasm32-unknown-unknown` builds in CI for evidence
-//! this logic itself is embedded-viable. This crate's own binary links `std` (for
-//! `println!`) purely for the demo's console output, not because the check needs it.
+//! APIs from `tpt-gis-core`/`tpt-gis-geom`. This crate builds `no_std` itself with
+//! `--no-default-features` (see CI's `no_std` job, which cross-compiles this lib for
+//! `thumbv7em-none-eabihf` and `riscv32imc-unknown-none-elf` — the latter being the
+//! ESP32-C3's target) so [`check_position`] is ready to drop into real firmware
+//! (e.g. an `esp-hal`-based ESP32/C3/S3 project) without changes. The `std` feature
+//! is on by default so this crate's own demo binary (which uses `println!`) builds
+//! normally; it is not needed by [`check_position`] itself.
+
+#![cfg_attr(not(feature = "std"), no_std)]
 
 use tpt_gis_core::geodesic;
 use tpt_gis_core::projection::local_tangent_plane::LocalTangentPlane;

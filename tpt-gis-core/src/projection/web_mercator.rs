@@ -60,4 +60,12 @@ mod tests {
         assert!((recovered.lat_deg - original.lat_deg).abs() < 1e-9);
         assert!((recovered.lon_deg - original.lon_deg).abs() < 1e-9);
     }
+
+    #[test]
+    fn forward_matches_known_reference() {
+        let point = GeoPoint::new(40.7484, -73.9857);
+        let projected = forward(point);
+        assert!((projected.x - (-8236050.45)).abs() < 1.0, "x = {}", projected.x);
+        assert!((projected.y - 4975301.25).abs() < 1.0, "y = {}", projected.y);
+    }
 }

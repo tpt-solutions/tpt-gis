@@ -28,10 +28,7 @@ impl LocalTangentPlane {
     /// Constructs a tangent plane centered on `origin`.
     #[must_use]
     pub fn new(origin: GeoPoint) -> Self {
-        Self {
-            origin,
-            cos_origin_lat: cos(origin.lat_rad()),
-        }
+        Self { origin, cos_origin_lat: cos(origin.lat_rad()) }
     }
 
     /// Projects `point` to local East/North meters relative to the origin.
@@ -52,7 +49,8 @@ impl LocalTangentPlane {
     /// local East/North meters relative to the origin.
     #[must_use]
     pub fn to_geographic(&self, point: PlanarPoint) -> GeoPoint {
-        let lon_deg = self.origin.lon_deg + (point.x / (EARTH_RADIUS_M * self.cos_origin_lat)).to_degrees();
+        let lon_deg =
+            self.origin.lon_deg + (point.x / (EARTH_RADIUS_M * self.cos_origin_lat)).to_degrees();
         let lat_deg = self.origin.lat_deg + (point.y / EARTH_RADIUS_M).to_degrees();
         GeoPoint::new(lat_deg, lon_deg)
     }

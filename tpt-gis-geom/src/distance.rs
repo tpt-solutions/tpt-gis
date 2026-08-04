@@ -60,8 +60,11 @@ mod tests {
 
     #[test]
     fn closest_point_on_segment_is_perpendicular_foot() {
-        let closest =
-            closest_point_on_segment(Point::new(5.0, 3.0), Point::new(0.0, 0.0), Point::new(10.0, 0.0));
+        let closest = closest_point_on_segment(
+            Point::new(5.0, 3.0),
+            Point::new(0.0, 0.0),
+            Point::new(10.0, 0.0),
+        );
         assert_eq!(closest, Point::new(5.0, 0.0));
     }
 

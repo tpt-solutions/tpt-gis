@@ -31,8 +31,8 @@ tpt-gis/
 └── tpt-gis-index     # R-Trees, Quadtrees, H3/S2 hexagonal grid integration
 ```
 
-See [`spec.txt`](spec.txt) for the full design document and [`todo.md`](todo.md) for
-the phased task breakdown.
+See [`spec.txt`](spec.txt) for the full design document, [`todo.md`](todo.md) for
+the phased task breakdown, and [`docs/`](docs/) for usage guides.
 
 ## Building
 

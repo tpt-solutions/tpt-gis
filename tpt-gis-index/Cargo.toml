@@ -11,3 +11,14 @@ homepage.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+tpt-gis-geom = { path = "../tpt-gis-geom", features = ["std"] }
+tpt-gis-io = { path = "../tpt-gis-io" }
+h3o = "0.10"
+
+[dev-dependencies]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

@@ -28,9 +28,18 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: thumbv7em-none-eabihf,wasm32-unknown-unknown
+          targets: thumbv7em-none-eabihf,riscv32imc-unknown-none-elf,wasm32-unknown-unknown
       - run: cargo build -p tpt-gis-core -p tpt-gis-geom --target thumbv7em-none-eabihf
+      # riscv32imc-unknown-none-elf is the target for the ESP32-C3 (mainline Rust
+      # support, no toolchain fork needed). The ESP32/ESP32-S3 (Xtensa) targets need
+      # the community `esp-rs` toolchain fork (via `espup`) and are not yet in CI —
+      # see todo.md.
+      - run: cargo build -p tpt-gis-core -p tpt-gis-geom --target riscv32imc-unknown-none-elf
       - run: cargo build -p tpt-gis-core -p tpt-gis-geom --target wasm32-unknown-unknown
+      - run: cargo build -p tpt-gis-core -p tpt-gis-geom --target wasm32-wasi
+      # The MVP 2 demo's own check_position logic (not just tpt-gis-core/geom) is
+      # no_std-portable too, so it's ready to drop into real ESP32-C3 firmware.
+      - run: cargo build -p drone-geofence-demo --lib --no-default-features --target riscv32imc-unknown-none-elf
 
   fmt:
     name: rustfmt
