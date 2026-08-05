@@ -111,6 +111,12 @@ pub enum WkbError {
     /// The input had unconsumed bytes remaining after one complete geometry was
     /// read.
     TrailingBytes(usize),
+    /// A nested `Multi*`/`GeometryCollection` exceeded the maximum allowed nesting
+    /// depth (a guard against malicious, deeply-recursive input).
+    MaxNestingDepth,
+    /// A coordinate contained a non-finite value (NaN or infinity), which this
+    /// crate's geometry types do not represent.
+    NonFiniteCoordinate,
 }
 
 impl fmt::Display for WkbError {
@@ -133,6 +139,10 @@ impl fmt::Display for WkbError {
             WkbError::TrailingBytes(count) => {
                 write!(f, "{count} unconsumed byte(s) after the WKB geometry")
             }
+            WkbError::MaxNestingDepth => write!(f, "WKB nesting depth exceeded maximum"),
+            WkbError::NonFiniteCoordinate => {
+                write!(f, "coordinate is not a finite number (NaN or infinity)")
+            }
         }
     }
 }
@@ -148,6 +158,10 @@ impl std::error::Error for WkbError {}
 fn u32_len(len: usize) -> u32 {
     u32::try_from(len).expect("geometry has more than u32::MAX points/rings/elements")
 }
+
+/// The maximum nesting depth allowed for nested `Multi*`/`GeometryCollection`
+/// geometries. Beyond this, parsing is rejected to bound stack usage on hostile input.
+const MAX_NESTING_DEPTH: u32 = 32;
 
 // ---------------------------------------------------------------------------
 // Reading
@@ -198,6 +212,9 @@ impl<'a> Reader<'a> {
     fn read_point(&mut self, order: ByteOrder) -> Result<Point, WkbError> {
         let x = self.read_f64(order)?;
         let y = self.read_f64(order)?;
+        if !x.is_finite() || !y.is_finite() {
+            return Err(WkbError::NonFiniteCoordinate);
+        }
         Ok(Point::new(x, y))
     }
 
@@ -227,11 +244,11 @@ impl<'a> Reader<'a> {
     /// Reads a 4-byte count followed by that many complete, independent WKB
     /// geometries (each with its own byte-order marker and type code) — the shape
     /// used by `Multi*` and `GeometryCollection` bodies.
-    fn read_elements(&mut self, order: ByteOrder) -> Result<Vec<Geometry>, WkbError> {
+    fn read_elements(&mut self, order: ByteOrder, depth: u32) -> Result<Vec<Geometry>, WkbError> {
         let count = self.read_u32(order)?;
         let mut geometries = Vec::new();
         for _ in 0..count {
-            geometries.push(self.read_geometry()?);
+            geometries.push(self.read_geometry(depth + 1)?);
         }
         Ok(geometries)
     }
@@ -242,9 +259,10 @@ impl<'a> Reader<'a> {
         &mut self,
         order: ByteOrder,
         expected: u32,
+        depth: u32,
         extract: impl Fn(Geometry) -> Result<T, Geometry>,
     ) -> Result<Vec<T>, WkbError> {
-        self.read_elements(order)?
+        self.read_elements(order, depth)?
             .into_iter()
             .map(|geometry| {
                 extract(geometry).map_err(|other| WkbError::UnexpectedElementType {
@@ -257,7 +275,10 @@ impl<'a> Reader<'a> {
 
     /// Reads one full geometry: byte-order marker, type code, and type-specific
     /// body.
-    fn read_geometry(&mut self) -> Result<Geometry, WkbError> {
+    fn read_geometry(&mut self, depth: u32) -> Result<Geometry, WkbError> {
+        if depth > MAX_NESTING_DEPTH {
+            return Err(WkbError::MaxNestingDepth);
+        }
         let order = ByteOrder::from_marker(self.read_u8()?)?;
         let type_code = self.read_u32(order)?;
         match type_code {
@@ -265,30 +286,35 @@ impl<'a> Reader<'a> {
             geom_type::LINE_STRING => Ok(Geometry::LineString(self.read_points(order)?)),
             geom_type::POLYGON => Ok(Geometry::Polygon(self.read_polygon(order)?)),
             geom_type::MULTI_POINT => {
-                let points = self.read_typed_elements(order, geom_type::POINT, |g| match g {
-                    Geometry::Point(p) => Ok(p),
-                    other => Err(other),
-                })?;
+                let points =
+                    self.read_typed_elements(order, geom_type::POINT, depth + 1, |g| match g {
+                        Geometry::Point(p) => Ok(p),
+                        other => Err(other),
+                    })?;
                 Ok(Geometry::MultiPoint(points))
             }
             geom_type::MULTI_LINE_STRING => {
-                let lines =
-                    self.read_typed_elements(order, geom_type::LINE_STRING, |g| match g {
+                let lines = self.read_typed_elements(
+                    order,
+                    geom_type::LINE_STRING,
+                    depth + 1,
+                    |g| match g {
                         Geometry::LineString(points) => Ok(points),
                         other => Err(other),
-                    })?;
+                    },
+                )?;
                 Ok(Geometry::MultiLineString(lines))
             }
             geom_type::MULTI_POLYGON => {
                 let polygons =
-                    self.read_typed_elements(order, geom_type::POLYGON, |g| match g {
+                    self.read_typed_elements(order, geom_type::POLYGON, depth + 1, |g| match g {
                         Geometry::Polygon(polygon) => Ok(polygon),
                         other => Err(other),
                     })?;
                 Ok(Geometry::MultiPolygon(polygons))
             }
             geom_type::GEOMETRY_COLLECTION => {
-                Ok(Geometry::GeometryCollection(self.read_elements(order)?))
+                Ok(Geometry::GeometryCollection(self.read_elements(order, depth + 1)?))
             }
             other => Err(WkbError::UnknownGeometryType(other)),
         }
@@ -304,7 +330,7 @@ impl<'a> Reader<'a> {
 /// nothing else — trailing bytes are an error, not silently ignored.
 pub fn parse_geometry(bytes: &[u8]) -> Result<Geometry, WkbError> {
     let mut reader = Reader::new(bytes);
-    let geometry = reader.read_geometry()?;
+    let geometry = reader.read_geometry(0)?;
     if reader.remaining_len() > 0 {
         return Err(WkbError::TrailingBytes(reader.remaining_len()));
     }
@@ -617,5 +643,39 @@ mod tests {
             parse_geometry(&bytes),
             Err(WkbError::UnexpectedElementType { expected: 1, found: 2 })
         ));
+    }
+
+    #[test]
+    fn rejects_non_finite_coordinate() {
+        let mut bytes = vec![1u8];
+        bytes.extend_from_slice(&1u32.to_le_bytes()); // type = Point
+        bytes.extend_from_slice(&f64::NAN.to_le_bytes());
+        bytes.extend_from_slice(&0.0f64.to_le_bytes());
+        assert!(matches!(parse_geometry(&bytes), Err(WkbError::NonFiniteCoordinate)));
+    }
+
+    #[test]
+    fn rejects_excessive_nesting_depth() {
+        // A GeometryCollection nested more than MAX_NESTING_DEPTH times. Build the
+        // innermost as a Point, then wrap it `depth` times.
+        let mut depth = 0u32;
+        // Build manually: repeatedly prefix a GeometryCollection header.
+        let mut inner = Vec::new();
+        inner.push(1u8); // little-endian
+        inner.extend_from_slice(&1u32.to_le_bytes()); // Point
+        inner.extend_from_slice(&1.0f64.to_le_bytes());
+        inner.extend_from_slice(&2.0f64.to_le_bytes());
+        loop {
+            depth += 1;
+            let mut wrapped = vec![1u8];
+            wrapped.extend_from_slice(&7u32.to_le_bytes()); // GeometryCollection
+            wrapped.extend_from_slice(&1u32.to_le_bytes()); // 1 element
+            wrapped.extend_from_slice(&inner);
+            inner = wrapped;
+            if depth > 40 {
+                break;
+            }
+        }
+        assert!(matches!(parse_geometry(&inner), Err(WkbError::MaxNestingDepth)));
     }
 }

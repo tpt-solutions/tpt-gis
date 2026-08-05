@@ -65,4 +65,4 @@ pub use band::{AnyBand, Band, GeoTransform, Raster};
 pub use cell::{CellKind, CellType};
 pub use error::RasterError;
 pub use grid::Grid;
-pub use resample::{Resampling, sample_average, sample_bilinear, sample_nearest};
+pub use resample::{sample_average, sample_bilinear, sample_nearest, Resampling};

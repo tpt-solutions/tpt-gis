@@ -1,4 +1,4 @@
-﻿//! ESRI Shapefile (`.shp` + `.dbf`) reader.
+//! ESRI Shapefile (`.shp` + `.dbf`) reader.
 //!
 //! This module reads geometry from the `.shp` *main file* and attributes from the
 //! `.dbf` *attribute file*. It is deliberately **read-only** (see `todo.md`: the
@@ -136,6 +136,13 @@ impl<'a> Cursor<'a> {
     fn is_at_end(&self) -> bool {
         self.pos >= self.bytes.len()
     }
+
+    /// The number of bytes left between the current position and the end of the
+    /// buffer. Used to bound count-derived `Vec` allocations against the actual
+    /// available input.
+    fn remaining(&self) -> usize {
+        self.bytes.len() - self.pos
+    }
 }
 
 /// Reads an (x, y) pair, little-endian, in the order they appear in every shape
@@ -154,6 +161,20 @@ fn read_parts_and_points(cursor: &mut Cursor<'_>) -> Result<Vec<Vec<Point>>, Sha
 
     let num_parts = usize_from_i32(cursor.i32_le()?)?;
     let num_points = usize_from_i32(cursor.i32_le()?)?;
+
+    // Bound the count-derived allocations to what can plausibly fit in the remaining
+    // input. A hostile `NumParts`/`NumPoints` would otherwise make `Vec::with_capacity`
+    // allocate an unbounded amount of memory before any further validation runs.
+    let rest = cursor.remaining();
+    let needed = num_parts
+        .checked_mul(4)
+        .and_then(|parts_bytes| {
+            num_points.checked_mul(16).and_then(|pts_bytes| parts_bytes.checked_add(pts_bytes))
+        })
+        .ok_or(ShapefileError::UnexpectedEndOfInput)?;
+    if needed > rest {
+        return Err(ShapefileError::UnexpectedEndOfInput);
+    }
 
     let mut part_starts = Vec::with_capacity(num_parts);
     for _ in 0..num_parts {
@@ -206,6 +227,10 @@ fn parse_multipoint_record(cursor: &mut Cursor<'_>) -> Result<Geometry, Shapefil
     // Box, unused.
     cursor.skip(32)?;
     let num_points = usize_from_i32(cursor.i32_le()?)?;
+    // Bound the point allocation to the remaining input (16 bytes per point).
+    if num_points > cursor.remaining() / 16 {
+        return Err(ShapefileError::UnexpectedEndOfInput);
+    }
     let mut points = Vec::with_capacity(num_points);
     for _ in 0..num_points {
         points.push(read_xy(cursor)?);
@@ -322,9 +347,11 @@ struct FieldDescriptor {
     length: usize,
 }
 
-fn trimmed_ascii(bytes: &[u8]) -> &str {
-    let text = core::str::from_utf8(bytes).unwrap_or("").trim();
-    text
+fn trimmed_ascii(bytes: &[u8]) -> String {
+    // Lossy rather than strict: real-world `.dbf` Character fields are frequently not
+    // valid UTF-8 (legacy code pages, etc.). `from_utf8_lossy` replaces bad bytes with
+    // U+FFFD instead of silently producing an empty string.
+    String::from_utf8_lossy(bytes).trim().to_string()
 }
 
 /// Parses one field's raw fixed-width text into a [`DbfValue`], per its descriptor's
@@ -336,7 +363,7 @@ fn trimmed_ascii(bytes: &[u8]) -> &str {
 /// 8 ASCII digits, and [`ShapefileError::InvalidFieldType`] for an unsupported type byte.
 fn parse_field_value(field_type: u8, raw: &[u8]) -> Result<DbfValue, ShapefileError> {
     match field_type {
-        b'C' => Ok(DbfValue::Character(trimmed_ascii(raw).to_string())),
+        b'C' => Ok(DbfValue::Character(trimmed_ascii(raw))),
         b'N' | b'F' => {
             let text = trimmed_ascii(raw);
             if text.is_empty() {
@@ -442,7 +469,12 @@ pub fn read_dbf(bytes: &[u8]) -> Result<Vec<DbfRecord>, ShapefileError> {
         cursor.skip(header_bytes - cursor.pos)?;
     }
 
-    let mut records = Vec::with_capacity(num_records);
+    // Bound the `records` allocation to what the remaining file bytes can actually
+    // hold. A hostile `num_records` (a full `i32`, e.g. 2^31) would otherwise make
+    // `Vec::with_capacity` attempt an unbounded allocation.
+    let records_capacity =
+        bytes.len().saturating_sub(cursor.pos).checked_div(record_bytes.max(1)).unwrap_or(0);
+    let mut records = Vec::with_capacity(num_records.min(records_capacity));
     for _ in 0..num_records {
         let record_start = cursor.pos;
         let deletion_flag = cursor.take(1)?[0];
@@ -489,7 +521,7 @@ impl<'a> ShpGeometryIter<'a> {
     #[must_use]
     pub fn new(bytes: &'a [u8]) -> Self {
         let mut cursor = Cursor::new(bytes);
-        let mut finished = false;
+        let finished = false;
         let _ = skip_shp_header(&mut cursor);
         Self { cursor, finished }
     }
@@ -499,15 +531,25 @@ impl<'a> Iterator for ShpGeometryIter<'a> {
     type Item = Result<Geometry, ShapefileError>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.finished || self.cursor.is_at_end() {
-            return None;
+        loop {
+            if self.finished || self.cursor.is_at_end() {
+                return None;
+            }
+            match read_next_shp_record(&mut self.cursor) {
+                // A real geometry: yield it and remember whether we're now at EOF.
+                Ok(Some(geometry)) => {
+                    self.finished = self.cursor.is_at_end();
+                    return Some(Ok(geometry));
+                }
+                // A `Null Shape` record carries no geometry; skip it and keep going.
+                Ok(None) => continue,
+                // Any parse error stops iteration and is surfaced to the caller.
+                Err(e) => {
+                    self.finished = true;
+                    return Some(Err(e));
+                }
+            }
         }
-        if let Err(e) = read_next_shp_record(&mut self.cursor) {
-            self.finished = true;
-            return Some(Err(e));
-        }
-        self.finished = self.cursor.is_at_end();
-        None
     }
 }
 
@@ -729,6 +771,28 @@ mod tests {
 
         let result = read_shp(&bytes);
         assert!(matches!(result, Err(ShapefileError::UnexpectedEndOfInput)));
+    }
+
+    #[test]
+    fn shp_geometry_iter_yields_each_record() {
+        let mut bytes = shp_header(1);
+        let mut content = Vec::new();
+        content.extend_from_slice(&1i32.to_le_bytes());
+        content.extend_from_slice(&12.5f64.to_le_bytes());
+        content.extend_from_slice(&(-34.25f64).to_le_bytes());
+        push_record(&mut bytes, 1, &content);
+
+        content.clear();
+        content.extend_from_slice(&1i32.to_le_bytes());
+        content.extend_from_slice(&0.0f64.to_le_bytes());
+        content.extend_from_slice(&0.0f64.to_le_bytes());
+        push_record(&mut bytes, 2, &content);
+
+        let geometries: Vec<_> = ShpGeometryIter::new(&bytes).map(|g| g.unwrap()).collect();
+        assert_eq!(
+            geometries,
+            vec![Geometry::Point(Point::new(12.5, -34.25)), Geometry::Point(Point::new(0.0, 0.0)),]
+        );
     }
 
     fn build_dbf() -> Vec<u8> {

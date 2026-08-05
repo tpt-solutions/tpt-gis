@@ -35,6 +35,12 @@ pub enum WktError {
     /// The geometry parsed successfully but the input had leftover, non-whitespace
     /// text after it.
     TrailingInput(String),
+    /// A nested `GEOMETRYCOLLECTION` exceeded the maximum allowed nesting depth (a
+    /// guard against malicious, deeply-recursive input).
+    MaxNestingDepth,
+    /// A coordinate contained a non-finite value (NaN or infinity), which this
+    /// crate's geometry types do not represent.
+    NonFiniteCoordinate,
 }
 
 impl fmt::Display for WktError {
@@ -48,11 +54,19 @@ impl fmt::Display for WktError {
                 "\"{name} EMPTY\" is not supported; this parser does not represent empty geometries"
             ),
             WktError::TrailingInput(text) => write!(f, "unexpected trailing input: \"{text}\""),
+            WktError::MaxNestingDepth => write!(f, "WKT nesting depth exceeded maximum"),
+            WktError::NonFiniteCoordinate => {
+                write!(f, "coordinate is not a finite number (NaN or infinity)")
+            }
         }
     }
 }
 
 impl std::error::Error for WktError {}
+
+/// The maximum nesting depth allowed for `GEOMETRYCOLLECTION` geometries. Beyond
+/// this, parsing is rejected to bound stack usage on hostile input.
+const MAX_NESTING_DEPTH: u32 = 32;
 
 /// A cursor over the characters of a WKT string.
 ///
@@ -245,6 +259,9 @@ fn parse_list<T>(
 fn parse_coord(p: &mut Parser) -> Result<Point, WktError> {
     let x = p.read_number()?;
     let y = p.read_number()?;
+    if !x.is_finite() || !y.is_finite() {
+        return Err(WktError::NonFiniteCoordinate);
+    }
     Ok(Point::new(x, y))
 }
 
@@ -273,7 +290,10 @@ fn parse_multipoint_item(p: &mut Parser) -> Result<Point, WktError> {
 
 /// Parses one geometry, starting from its type keyword, recursing for
 /// `GEOMETRYCOLLECTION` members.
-fn parse_tagged_geometry(p: &mut Parser) -> Result<Geometry, WktError> {
+fn parse_tagged_geometry(p: &mut Parser, depth: u32) -> Result<Geometry, WktError> {
+    if depth > MAX_NESTING_DEPTH {
+        return Err(WktError::MaxNestingDepth);
+    }
     let keyword = p.read_word()?;
     match keyword.to_ascii_uppercase().as_str() {
         "POINT" => {
@@ -319,7 +339,7 @@ fn parse_tagged_geometry(p: &mut Parser) -> Result<Geometry, WktError> {
         }
         "GEOMETRYCOLLECTION" => {
             expect_open_paren(p, "GEOMETRYCOLLECTION")?;
-            let geometries = parse_list(p, parse_tagged_geometry)?;
+            let geometries = parse_list(p, |p| parse_tagged_geometry(p, depth + 1))?;
             Ok(Geometry::GeometryCollection(geometries))
         }
         other => Err(WktError::UnknownGeometryType(other.to_string())),
@@ -348,7 +368,7 @@ fn parse_tagged_geometry(p: &mut Parser) -> Result<Geometry, WktError> {
 /// geometry.
 pub fn parse_geometry(wkt: &str) -> Result<Geometry, WktError> {
     let mut parser = Parser::new(wkt);
-    let geometry = parse_tagged_geometry(&mut parser)?;
+    let geometry = parse_tagged_geometry(&mut parser, 0)?;
     parser.skip_whitespace();
     if !parser.eof() {
         return Err(WktError::TrailingInput(parser.remaining_preview()));
@@ -765,5 +785,29 @@ mod tests {
     fn rejects_trailing_input() {
         let result = parse_geometry("POINT (30 10) garbage");
         assert!(matches!(result, Err(WktError::TrailingInput(_))));
+    }
+
+    #[test]
+    fn rejects_non_finite_coordinate() {
+        // Textual "NaN"/"inf" are rejected as unparseable numbers first, but an
+        // overflowing literal like `1e999` parses to f64::INFINITY, which the
+        // finiteness guard must still reject.
+        assert!(matches!(parse_geometry("POINT (1e999 10)"), Err(WktError::NonFiniteCoordinate)));
+        assert!(matches!(parse_geometry("POINT (10 1e999)"), Err(WktError::NonFiniteCoordinate)));
+    }
+
+    #[test]
+    fn rejects_excessive_nesting_depth() {
+        // Build GEOMETRYCOLLECTION( GEOMETRYCOLLECTION( ... POINT(0 0) ... ) ) deeper
+        // than the allowed limit.
+        let mut wkt = String::new();
+        for _ in 0..50 {
+            wkt.push_str("GEOMETRYCOLLECTION (");
+        }
+        wkt.push_str("POINT (0 0)");
+        for _ in 0..50 {
+            wkt.push(')');
+        }
+        assert!(matches!(parse_geometry(&wkt), Err(WktError::MaxNestingDepth)));
     }
 }

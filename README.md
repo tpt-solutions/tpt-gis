@@ -5,7 +5,7 @@ replacement for the GDAL/PROJ/GEOS stack, with `no_std` support for edge/embedde
 targets and cloud-native streaming for planetary-scale raster/vector data.
 
 **License:** Dual [MIT](LICENSE-MIT) / [Apache-2.0](LICENSE-APACHE), at your option.
-**Status:** Phase 1 (see [`todo.md`](todo.md) for the full roadmap).
+**Status:** Active development — see [`todo.md`](todo.md) for the full roadmap.
 
 ## Why
 
@@ -44,6 +44,23 @@ cargo test --workspace
 `tpt-gis-core` and `tpt-gis-geom` are `no_std` by default (enable the `std` feature
 for host-native math intrinsics) and are verified to cross-compile for embedded
 (`thumbv7em-none-eabihf`) and WebAssembly (`wasm32-unknown-unknown`) targets.
+
+## Examples
+
+- [`examples/spatial-join-cli`](examples/spatial-join-cli) — MVP 1: a planetary-scale
+  points-in-polygons spatial join engine CLI (reproject, join, GeoJSON/CSV output,
+  throughput benchmark).
+- [`examples/drone-geofence-demo`](examples/drone-geofence-demo) — MVP 2: a real-time
+  `no_std` drone geofence / navigation engine (breach detection + escape-vector).
+- [`examples/wasm-geofence-demo`](examples/wasm-geofence-demo) — a browser/WASM demo
+  that reuses the drone geofence `check_position` logic in a `wasm-bindgen` + canvas
+  harness.
+
+## Crates
+
+The workspace splits the engine into five crates plus a convenience facade crate
+[`tpt-gis`](tpt-gis) that re-exports them behind feature flags — most users should
+depend on `tpt-gis` rather than the individual crates.
 
 ## Contributing
 

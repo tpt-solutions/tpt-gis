@@ -33,8 +33,7 @@ fn ref_local(a: &Band<f64>, b: &Band<f64>, op: fn(f64, f64) -> f64) -> Band<f64>
             cells.push(out);
         }
     }
-    Band::new(Grid::new(a.width(), a.height(), cells).unwrap(), a.transform())
-        .with_nodata(f64::NAN)
+    Band::new(Grid::new(a.width(), a.height(), cells).unwrap(), a.transform()).with_nodata(f64::NAN)
 }
 
 /// The naive focal statistic, mirroring the crate's window-shrink + nodata-skip
@@ -79,8 +78,8 @@ fn ref_focal(band: &Band<f64>, radius: usize, stat: FocalStat) -> Band<f64> {
                 }
                 (FocalStat::StdDev, false) => {
                     let mean = values.iter().sum::<f64>() / values.len() as f64;
-                    let var =
-                        values.iter().map(|v| (v - mean) * (v - mean)).sum::<f64>() / values.len() as f64;
+                    let var = values.iter().map(|v| (v - mean) * (v - mean)).sum::<f64>()
+                        / values.len() as f64;
                     var.sqrt()
                 }
             });
@@ -96,10 +95,9 @@ fn assert_close(a: &Band<f64>, b: &Band<f64>) {
         for x in 0..a.width() {
             match (a.value_at(x, y), b.value_at(x, y)) {
                 (None, None) => {}
-                (Some(l), Some(r)) => assert!(
-                    (l - r).abs() < 1e-9,
-                    "mismatch at ({x}, {y}): {l} vs {r}"
-                ),
+                (Some(l), Some(r)) => {
+                    assert!((l - r).abs() < 1e-9, "mismatch at ({x}, {y}): {l} vs {r}")
+                }
                 _ => panic!("nodata disagreement at ({x}, {y})"),
             }
         }
@@ -127,10 +125,7 @@ fn focal_statistics_match_reference() {
         FocalStat::Median,
         FocalStat::StdDev,
     ] {
-        assert_close(
-            &algebra::focal(&band, 1, stat).unwrap(),
-            &ref_focal(&band, 1, stat),
-        );
+        assert_close(&algebra::focal(&band, 1, stat).unwrap(), &ref_focal(&band, 1, stat));
     }
 }
 
@@ -144,19 +139,10 @@ fn focal_skips_nodata_like_reference() {
     let got = algebra::focal(&band, 1, FocalStat::Mean).unwrap();
     assert_close(&got, &expected);
     // The hole is filled (not nodata), and equals the mean of its 8 neighbours.
-    let sum: f64 = [
-        (1, 1),
-        (2, 1),
-        (3, 1),
-        (1, 2),
-        (3, 2),
-        (1, 3),
-        (2, 3),
-        (3, 3),
-    ]
-    .iter()
-    .map(|&(x, y)| band.get(x, y).unwrap())
-    .sum();
+    let sum: f64 = [(1, 1), (2, 1), (3, 1), (1, 2), (3, 2), (1, 3), (2, 3), (3, 3)]
+        .iter()
+        .map(|&(x, y)| band.get(x, y).unwrap())
+        .sum();
     assert!((got.get(2, 2).unwrap() - sum / 8.0).abs() < 1e-9);
 }
 
@@ -165,7 +151,8 @@ fn average_downsampling_matches_block_mean_reference() {
     use tpt_gis_raster::resample;
     let band = band_from_fn(8, 8, |x, y| (x * 2 + y * 5) as f64);
     let factor = 2;
-    let overview = resample::downsample(&band, factor, tpt_gis_raster::Resampling::Average).unwrap();
+    let overview =
+        resample::downsample(&band, factor, tpt_gis_raster::Resampling::Average).unwrap();
 
     // Independent block-mean reference.
     let (ow, oh) = (band.width() / factor, band.height() / factor);

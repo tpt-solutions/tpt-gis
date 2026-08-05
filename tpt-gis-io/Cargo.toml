@@ -8,6 +8,8 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
+keywords = ["gis", "geojson", "wkb", "shapefile", "geospatial"]
+categories = ["science::geo", "parser-implementations"]
 
 [lints]
 workspace = true

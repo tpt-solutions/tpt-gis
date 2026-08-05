@@ -34,15 +34,12 @@ proptest! {
         let p2 = GeoPoint::new(lat2, lon2);
         let r12 = geodesic::inverse(&Ellipsoid::WGS84, p1, p2);
         let r21 = geodesic::inverse(&Ellipsoid::WGS84, p2, p1);
-        match (r12, r21) {
-            (Ok(r12), Ok(r21)) => {
-                prop_assert!(
-                    (r12.distance_m - r21.distance_m).abs() < 1e-3,
-                    "distance not symmetric: {} != {}",
-                    r12.distance_m, r21.distance_m
-                );
-            }
-            _ => {}
+        if let (Ok(r12), Ok(r21)) = (r12, r21) {
+            prop_assert!(
+                (r12.distance_m - r21.distance_m).abs() < 1e-3,
+                "distance not symmetric: {} != {}",
+                r12.distance_m, r21.distance_m
+            );
         }
     }
 

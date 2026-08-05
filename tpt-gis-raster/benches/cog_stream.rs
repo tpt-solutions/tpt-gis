@@ -1,4 +1,5 @@
 //! Benchmark for the Cloud Optimized GeoTIFF streaming reader.
+#![allow(missing_docs)]
 //!
 //! It compares two ways of reading a remote-style COG built entirely in memory
 //! (served through [`MemoryTransport`], which still exercises the tile-by-tile
@@ -24,17 +25,13 @@ fn build_cog() -> Vec<u8> {
 
 fn bench_stream(c: &mut Criterion) {
     let bytes = build_cog();
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .build()
-        .expect("tokio runtime");
+    let runtime = tokio::runtime::Builder::new_current_thread().build().expect("tokio runtime");
 
     let mut group = c.benchmark_group("cog_read");
     group.bench_function(BenchmarkId::new("region", "one_tile"), |b| {
         b.iter(|| {
             let reader = CogRangeReader::with_transport(MemoryTransport::new(bytes.clone()));
-            let band = runtime
-                .block_on(reader.read_region(0, 0, 256, 256))
-                .expect("region read");
+            let band = runtime.block_on(reader.read_region(0, 0, 256, 256)).expect("region read");
             criterion::black_box(band.width());
         });
     });

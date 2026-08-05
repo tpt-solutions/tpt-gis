@@ -1,8 +1,7 @@
 #![allow(clippy::missing_docs_in_private_items)]
 
-use tpt_gis_io::shapefile::read_shp;
-use tpt_gis_io::shapefile::ShapefileError;
+use libfuzzer_sys::fuzz_target;
 
-pub fuzz_target!(|data: &[u8]| {
-    let _ = read_shp(data);
+fuzz_target!(|data: &[u8]| {
+    let _ = tpt_gis_io::shapefile::read_shp(data);
 });

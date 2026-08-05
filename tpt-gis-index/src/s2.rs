@@ -4,8 +4,15 @@
 //! quartered into a quadtree of cells. A cell is identified by a 64-bit
 //! [`S2CellId`](S2CellId) that packs the face (3 bits) and, level by level, the
 //! two bits of the cell's `(i, j)` position on its face, with a trailing marker
-//! bit that records the level. This gives the same tokens Google's S2 produces
-//! for the same cell, so an id can be shared with any other S2 tool.
+//! bit that records the level.
+//!
+//! **Compatibility note:** this implementation orders the `(i, j)` bits with a
+//! simple Z-order (Morton) interleave, *not* the Hilbert curve Google's S2 uses.
+//! The cell math (face selection, the quadratic `s`/`t` ↔ `u`/`v` transform, and
+//! parent/child navigation) is self-consistent and round-trips internally, but the
+//! tokens produced here are **not** byte-compatible with Google's S2 cell ids.
+//! Treat the token format as internal to this crate unless/until a true
+//! Hilbert-curve mapping is added.
 //!
 //! The integration here is intentionally small: turn a latitude/longitude into a
 //! cell id (optionally at a chosen level), go back the other way, walk up to the
@@ -72,15 +79,16 @@ impl S2CellId {
     pub fn ij(self) -> (u64, u64) {
         let level = self.level() as u32;
         // The interleaved position sits just above the level marker bit. Within it,
-        // level-0 bits are nearest the marker (LSB-first).
+        // level-0 bits are nearest the marker (LSB-first), and bit `2k` holds i's
+        // bit `k` while bit `2k + 1` holds j's bit `k` — matching `from_face_ij`.
         let shift = 2 * (MAX_LEVEL as u32 - level) + 1;
         let bits = self.0 >> shift;
         let mut i = 0u64;
         let mut j = 0u64;
         for k in 0..level {
-            let pair = bits >> (2 * k as u32);
-            i |= ((pair >> 1) & 1) << k as u32;
-            j |= (pair & 1) << k as u32;
+            let pair = bits >> (2 * k);
+            i |= (pair & 1) << k;
+            j |= ((pair >> 1) & 1) << k;
         }
         (i, j)
     }
@@ -152,11 +160,14 @@ impl S2CellId {
         let y = lat.cos() * lon.sin();
         let z = lat.sin();
         let (face, u, v) = face_uv_from_xyz(x, y, z);
-        let i = st_to_ij(u);
-        let j = st_to_ij(v);
+        // `u`/`v` are cube-space coordinates; convert them back to the linear `s`/`t`
+        // space that `st_to_ij` maps to cell indices. Skipping this inverse quadratic
+        // transform would map sphere points to the wrong cells.
+        let s = uv_to_st(u);
+        let t = uv_to_st(v);
         let shift = MAX_LEVEL - level;
-        let i = i >> shift as u32;
-        let j = j >> shift as u32;
+        let i = st_to_ij(s) >> shift as u32;
+        let j = st_to_ij(t) >> shift as u32;
         Self::from_face_ij(face, i, j, level)
     }
 
@@ -249,9 +260,13 @@ fn face_uv_to_xyz(face: u8, u: f64, v: f64) -> (f64, f64, f64) {
         0 => (1.0, u, v),
         1 => (-u, 1.0, v),
         2 => (-u, -v, 1.0),
-        3 => (-1.0, -v, -u),
-        4 => (v, -1.0, -u),
-        _ => (v, u, -1.0),
+        // Faces 3/4/5: these must be the exact inverse of `face_uv_from_xyz` for the
+        // round trip (xyz → face_uv → xyz) to reproduce the original point. The
+        // previous assignments transposed/negated u and v, which silently rotated
+        // every point on those three faces.
+        3 => (-1.0, -u, -v),
+        4 => (u, -1.0, -v),
+        _ => (-u, -v, 1.0),
     }
 }
 
@@ -265,10 +280,23 @@ fn st_to_uv(s: f64) -> f64 {
     }
 }
 
-/// Maps a linear `s`/`t` in `[-1, 1]` to a cell index in `0..2^MAX_LEVEL`.
+/// The inverse of [`st_to_uv`]: maps a cube-space `u`/`v` in `[-1, 1]` back to the
+/// linear `s`/`t` in `[-1, 1]`. This is the step [`S2CellId::from_lat_lon`] must
+/// apply to the `(u, v)` returned by [`face_uv_from_xyz`] before converting to cell
+/// indices.
+fn uv_to_st(u: f64) -> f64 {
+    if u >= 0.0 {
+        (1.0 + 3.0 * u).sqrt() * 0.5
+    } else {
+        1.0 - (1.0 - 3.0 * u).sqrt() * 0.5
+    }
+}
+
+/// Maps a linear `s`/`t` in `[0, 1]` to a cell index in `0..2^MAX_LEVEL`. This is
+/// the exact inverse of [`ij_to_st`] (which returns a centre in `[0, 1]`).
 fn st_to_ij(s: f64) -> u64 {
     let max = (1u64 << MAX_LEVEL) - 1;
-    let v = (((s + 1.0) * 0.5) * (1u64 << MAX_LEVEL) as f64).floor();
+    let v = (s * (1u64 << MAX_LEVEL) as f64).floor();
     v.clamp(0.0, max as f64) as u64
 }
 

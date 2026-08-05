@@ -6,17 +6,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `tpt-gis` is a pure Rust, `no_std`-capable, planetary-scale GIS engine intended as a
 zero-FFI replacement for the GDAL/PROJ/GEOS stack. It is a Cargo workspace of five
-crates, currently in Phase 1 of a multi-phase roadmap (see `todo.md` for the full
-checklist and `spec.txt` for the design rationale). Two crates (`tpt-gis-core`,
-`tpt-gis-geom`) have real implementations; the other three are stub crates whose
-lib.rs is just a doc comment — check `todo.md` before assuming a feature exists.
+crates, now well into its roadmap (see `todo.md` for the full checklist and `spec.txt`
+for the design rationale). All five crates have real implementations:
 
 ```
 tpt-gis-core      # CRS definitions, datum transforms, geodesic math — no_std, implemented
 tpt-gis-geom      # OGC Simple Features geometry + topological predicates — no_std, implemented
-tpt-gis-io        # GeoJSON/WKB/WKT/Shapefile/GeoPackage — stub, Phase 2
-tpt-gis-index     # R-Trees, Quadtrees, H3/S2 — stub, Phase 2
-tpt-gis-raster    # Grid data, map algebra, COG parsing — stub, Phase 3
+tpt-gis-io        # GeoJSON/WKB/WKT/Shapefile readers+writers — implemented, Phase 2
+tpt-gis-index     # R-Trees, Quadtrees, H3/S2 — implemented, Phase 2
+tpt-gis-raster    # Grid data, map algebra, COG/GeoTIFF parsing — implemented, Phase 3
 ```
 
 ## Commands
@@ -63,7 +61,7 @@ than own it, so they can be built over `const`/`static` data with zero heap allo
 — this is a hard requirement driven by the drone-geofence MVP, not a style preference.
 
 **Workspace-level lints (`Cargo.toml` `[workspace.lints]`), inherited via `[lints]
-workspace = true` in every crate:** `unsafe_code = "deny"` and `clippy::pedantic` as a
+workspace = true` in every crate:** `unsafe_code = "deny"` and `clippy::all` as a
 warning. Avoid `unsafe`; if it's ever truly unavoidable, it needs a `// SAFETY:`
 comment and explicit discussion in the PR (see `CONTRIBUTING.md`).
 

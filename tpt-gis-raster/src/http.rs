@@ -94,6 +94,11 @@ impl RangeTransport for HttpTransport {
         let client = self.client.clone();
         let url = self.url.clone();
         Box::pin(async move {
+            // A zero-length range would make the `end` computation below underflow
+            // (`start + len - 1`), so reject it up front.
+            if len == 0 {
+                return Err(CogHttpError::Http("requested zero-length range".to_string()));
+            }
             let end = start + len as u64 - 1;
             let range = format!("bytes={start}-{end}");
             let response = client
@@ -107,16 +112,19 @@ impl RangeTransport for HttpTransport {
                 return Err(CogHttpError::Http(format!("unexpected status {status}")));
             }
             let bytes = response.bytes().await.map_err(|e| CogHttpError::Http(e.to_string()))?;
-            Ok(bytes.to_vec())
+            // A misbehaving server must not make us buffer more bytes than we asked
+            // for. Cap the body to the requested length.
+            let truncated = bytes.iter().copied().take(len).collect::<Vec<u8>>();
+            Ok(truncated)
         })
     }
 
     fn content_length(&self) -> RangeSize {
         let client = self.client.clone();
         let url = self.url.clone();
-        Box::pin(async move {
-            client.head(&url).send().await.ok().and_then(|r| r.content_length())
-        })
+        Box::pin(
+            async move { client.head(&url).send().await.ok().and_then(|r| r.content_length()) },
+        )
     }
 }
 
@@ -238,12 +246,8 @@ impl CogRangeReader {
     /// Ensures the leading `PREFIX` bytes (or the whole file if smaller) are
     /// cached.
     async fn ensure_prefix(&self) -> Result<(), CogHttpError> {
-        let size = self
-            .transport
-            .content_length()
-            .await
-            .unwrap_or(PREFIX as u64)
-            .min(PREFIX as u64);
+        let size =
+            self.transport.content_length().await.unwrap_or(PREFIX as u64).min(PREFIX as u64);
         let size = size.max(16) as usize;
         let need = !self.cache.lock().unwrap().has_prefix(size);
         if need {
@@ -324,11 +328,7 @@ impl CogRangeReader {
         let cache = Arc::clone(&self.cache);
         let fetch: Box<dyn Fn(u64, usize) -> Result<Vec<u8>, GeoTiffError> + Send + Sync> =
             Box::new(move |offset, len| {
-                cache
-                    .lock()
-                    .unwrap()
-                    .get(offset, len)
-                    .ok_or(GeoTiffError::NotFetched(offset))
+                cache.lock().unwrap().get(offset, len).ok_or(GeoTiffError::NotFetched(offset))
             });
         let total = self.transport.content_length().await.unwrap_or(u64::MAX);
         let tiff = GeoTiff::from_fetch(fetch, total)?;
@@ -337,6 +337,7 @@ impl CogRangeReader {
 }
 
 /// Computes the inclusive tile-index window covering `[x0, x1) x [y0, y1)`.
+#[allow(clippy::too_many_arguments)]
 fn tile_window(
     x0: usize,
     y0: usize,
@@ -381,10 +382,7 @@ mod tests {
         for (dx, dy) in [(0usize, 0usize), (10, 20), (255, 255)] {
             let col = 1536 + dx;
             let row = 1536 + dy;
-            assert_eq!(
-                band.get(dx, dy),
-                Some(((col as u32 * 7 + row as u32 * 13) % 251) as u8)
-            );
+            assert_eq!(band.get(dx, dy), Some(((col as u32 * 7 + row as u32 * 13) % 251) as u8));
         }
 
         // Streaming proof: only the prefix plus the single needed tile were fetched,

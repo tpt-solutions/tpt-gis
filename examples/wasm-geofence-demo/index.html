@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>tpt-gis — WASM Geofence Demo</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 2rem; max-width: 720px; }
+    canvas { border: 1px solid #888; cursor: crosshair; touch-action: none; }
+    #status { font-weight: 600; margin-top: 0.5rem; }
+    .breached { color: #c0392b; }
+    .clear { color: #27ae60; }
+    code { background: #f4f4f4; padding: 0 0.25rem; }
+  </style>
+</head>
+<body>
+  <h1>tpt-gis WASM Geofence Demo</h1>
+  <p>
+    Move your cursor over the map (San Francisco). The red rectangle is a no-fly
+    zone; the dot is your position. The check runs the same
+    <code>check_position</code> routine used by the embedded drone demo, compiled to
+    WebAssembly.
+  </p>
+  <canvas id="map" width="520" height="520"></canvas>
+  <div id="status">Move the mouse over the canvas…</div>
+
+  <script type="module">
+    import init, { check } from "./pkg/wasm_geofence_demo.js";
+
+    // No-fly zone (longitude/latitude), shared with drone-geofence-demo.
+    const ZONE = [
+      [-122.42, 37.77],
+      [-122.40, 37.77],
+      [-122.40, 37.79],
+      [-122.42, 37.79],
+      [-122.42, 37.77],
+    ];
+
+    const LON = [-122.43, -122.39];
+    const LAT = [37.765, 37.795];
+
+    const canvas = document.getElementById("map");
+    const ctx = canvas.getContext("2d");
+    const status = document.getElementById("status");
+
+    function project(lon, lat) {
+      const x = ((lon - LON[0]) / (LON[1] - LON[0])) * canvas.width;
+      const y = (1 - (lat - LAT[0]) / (LAT[1] - LAT[0])) * canvas.height;
+      return [x, y];
+    }
+
+    function render(lat, lon) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      ctx.fillStyle = "rgba(192, 57, 43, 0.25)";
+      ctx.strokeStyle = "#c0392b";
+      ctx.beginPath();
+      ZONE.forEach(([lo, la], i) => {
+        const [x, y] = project(lo, la);
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      });
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+
+      const [px, py] = project(lon, lat);
+
+      const result = check(lat, lon);
+      const breached = result.breached;
+
+      ctx.fillStyle = breached ? "#c0392b" : "#27ae60";
+      ctx.beginPath();
+      ctx.arc(px, py, 6, 0, 2 * Math.PI);
+      ctx.fill();
+
+      if (breached) {
+        status.className = "breached";
+        status.textContent =
+          `BREACH — fly heading ${result.escape_bearing_deg.toFixed(1)}° °, ` +
+          `${result.escape_distance_m.toFixed(0)} m to the nearest edge`;
+      } else {
+        status.className = "clear";
+        status.textContent = "CLEAR — outside the no-fly zone";
+      }
+    }
+
+    canvas.addEventListener("pointermove", (e) => {
+      const rect = canvas.getBoundingClientRect();
+      const x = (e.clientX - rect.left) / rect.width;
+      const y = (e.clientY - rect.top) / rect.height;
+      const lon = LON[0] + x * (LON[1] - LON[0]);
+      const lat = LAT[0] + (1 - y) * (LAT[1] - LAT[0]);
+      render(lat, lon);
+    });
+
+    await init();
+    render(37.782, -122.415);
+  </script>
+</body>
+</html>

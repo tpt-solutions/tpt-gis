@@ -1,9 +1,8 @@
 #![allow(clippy::missing_docs_in_private_items)]
 
-use tpt_gis_io::geojson::parse_geometry;
-use tpt_gis_io::geometry::Geometry;
+use libfuzzer_sys::fuzz_target;
 
-pub fuzz_target!(|data: &[u8]| {
+fuzz_target!(|data: &[u8]| {
     let s = String::from_utf8_lossy(data);
-    let _ = parse_geometry(&s);
+    let _ = tpt_gis_io::geojson::parse_geometry(&s);
 });

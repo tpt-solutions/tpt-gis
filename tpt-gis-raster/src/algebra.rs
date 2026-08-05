@@ -72,11 +72,8 @@ pub fn binary<T: CellType>(
     let fill = lhs.nodata_or_zero();
     let mut cells = Vec::with_capacity(lhs.grid().len());
     for (&left, &right) in lhs.grid().cells().iter().zip(rhs.grid().cells()) {
-        let value = if lhs.is_nodata(left) || rhs.is_nodata(right) {
-            fill
-        } else {
-            op(left, right)
-        };
+        let value =
+            if lhs.is_nodata(left) || rhs.is_nodata(right) { fill } else { op(left, right) };
         cells.push(value);
     }
     lhs.with_same_shape(cells)
@@ -408,10 +405,7 @@ pub fn focal_kernel<T: CellType>(
         return Err(RasterError::EmptyInput);
     }
     if kernel.width() % 2 == 0 || kernel.height() % 2 == 0 {
-        return Err(RasterError::EvenKernel {
-            width: kernel.width(),
-            height: kernel.height(),
-        });
+        return Err(RasterError::EvenKernel { width: kernel.width(), height: kernel.height() });
     }
 
     let fill = band.nodata_or_zero();
@@ -480,8 +474,11 @@ mod tests {
         let a = Band::new(grid, transform());
         let sum = add(&a, &a).unwrap();
         assert_eq!(sum.grid().cells(), &[255, 10]);
-        let difference = subtract(&Band::new(Grid::new(1, 1, vec![5u8]).unwrap(), transform()),
-            &Band::new(Grid::new(1, 1, vec![10u8]).unwrap(), transform())).unwrap();
+        let difference = subtract(
+            &Band::new(Grid::new(1, 1, vec![5u8]).unwrap(), transform()),
+            &Band::new(Grid::new(1, 1, vec![10u8]).unwrap(), transform()),
+        )
+        .unwrap();
         assert_eq!(difference.grid().cells(), &[0]);
     }
 
@@ -504,9 +501,10 @@ mod tests {
 
     #[test]
     fn output_keeps_the_georeferencing_of_the_left_operand() {
-        let a = Band::new(Grid::new(1, 1, vec![1i16]).unwrap(), GeoTransform::new(5.0, 6.0, 2.0, 2.0))
-            .with_epsg(4326)
-            .with_nodata(-1);
+        let a =
+            Band::new(Grid::new(1, 1, vec![1i16]).unwrap(), GeoTransform::new(5.0, 6.0, 2.0, 2.0))
+                .with_epsg(4326)
+                .with_nodata(-1);
         let sum = add(&a, &a).unwrap();
         assert_eq!(sum.transform(), a.transform());
         assert_eq!(sum.epsg(), Some(4326));
@@ -624,7 +622,8 @@ mod tests {
 
     #[test]
     fn focal_kernel_treats_a_nodata_neighbour_as_a_missing_contribution() {
-        let kernel = Grid::new(3, 3, vec![0.0, -1.0, 0.0, -1.0, 4.0, -1.0, 0.0, -1.0, 0.0]).unwrap();
+        let kernel =
+            Grid::new(3, 3, vec![0.0, -1.0, 0.0, -1.0, 4.0, -1.0, 0.0, -1.0, 0.0]).unwrap();
         let a = band(3, 3, vec![1, 2, 3, 4, 5, -9999, 7, 8, 9]);
         assert_eq!(focal_kernel(&a, &kernel).unwrap().get(1, 1), Some(-9999));
     }

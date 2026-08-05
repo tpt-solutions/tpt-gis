@@ -21,6 +21,12 @@ pub enum GeoJsonError {
     /// The input was valid JSON but not a well-formed GeoJSON geometry/Feature/
     /// FeatureCollection (e.g. missing `type`, wrong coordinate nesting).
     InvalidGeometry(String),
+    /// A nested `GeometryCollection` exceeded the maximum allowed nesting depth (a
+    /// guard against malicious, deeply-recursive input).
+    MaxNestingDepth,
+    /// A coordinate contained a non-finite value (NaN or infinity), which this
+    /// crate's geometry types do not represent.
+    NonFiniteCoordinate,
 }
 
 impl fmt::Display for GeoJsonError {
@@ -28,6 +34,10 @@ impl fmt::Display for GeoJsonError {
         match self {
             GeoJsonError::Json(e) => write!(f, "invalid JSON: {e}"),
             GeoJsonError::InvalidGeometry(msg) => write!(f, "invalid GeoJSON geometry: {msg}"),
+            GeoJsonError::MaxNestingDepth => write!(f, "GeoJSON nesting depth exceeded maximum"),
+            GeoJsonError::NonFiniteCoordinate => {
+                write!(f, "coordinate is not a finite number (NaN or infinity)")
+            }
         }
     }
 }
@@ -39,6 +49,10 @@ impl From<serde_json::Error> for GeoJsonError {
         GeoJsonError::Json(e)
     }
 }
+
+/// The maximum nesting depth allowed for `GeometryCollection` geometries. Beyond
+/// this, parsing is rejected to bound stack usage on hostile input.
+const MAX_NESTING_DEPTH: u32 = 32;
 
 fn coord_from_value(value: &Value) -> Result<Point, GeoJsonError> {
     let arr = value
@@ -52,6 +66,9 @@ fn coord_from_value(value: &Value) -> Result<Point, GeoJsonError> {
         .get(1)
         .and_then(Value::as_f64)
         .ok_or_else(|| GeoJsonError::InvalidGeometry("coordinate missing y".into()))?;
+    if !x.is_finite() || !y.is_finite() {
+        return Err(GeoJsonError::NonFiniteCoordinate);
+    }
     Ok(Point::new(x, y))
 }
 
@@ -91,7 +108,10 @@ fn polygon_to_value(polygon: &Polygon) -> Value {
 
 /// Parses a GeoJSON geometry object (`{"type": ..., "coordinates": ...}`, or
 /// `{"type": "GeometryCollection", "geometries": [...]}`) from its JSON value.
-pub fn geometry_from_value(value: &Value) -> Result<Geometry, GeoJsonError> {
+pub fn geometry_from_value(value: &Value, depth: u32) -> Result<Geometry, GeoJsonError> {
+    if depth > MAX_NESTING_DEPTH {
+        return Err(GeoJsonError::MaxNestingDepth);
+    }
     let obj = value
         .as_object()
         .ok_or_else(|| GeoJsonError::InvalidGeometry("geometry is not a JSON object".into()))?;
@@ -106,7 +126,7 @@ pub fn geometry_from_value(value: &Value) -> Result<Geometry, GeoJsonError> {
             .and_then(Value::as_array)
             .ok_or_else(|| GeoJsonError::InvalidGeometry("missing \"geometries\"".into()))?
             .iter()
-            .map(geometry_from_value)
+            .map(|g| geometry_from_value(g, depth + 1))
             .collect::<Result<Vec<_>, _>>()?;
         return Ok(Geometry::GeometryCollection(geometries));
     }
@@ -177,7 +197,7 @@ pub fn geometry_to_value(geometry: &Geometry) -> Value {
 
 /// Parses a GeoJSON geometry object from a JSON string.
 pub fn parse_geometry(json: &str) -> Result<Geometry, GeoJsonError> {
-    geometry_from_value(&serde_json::from_str(json)?)
+    geometry_from_value(&serde_json::from_str(json)?, 0)
 }
 
 /// Serializes a [`Geometry`] to a GeoJSON string.
@@ -233,7 +253,7 @@ pub fn parse_feature_collection(json: &str) -> Result<FeatureCollection, GeoJson
         .into_iter()
         .map(|raw| {
             Ok(Feature {
-                geometry: raw.geometry.map(|g| geometry_from_value(&g)).transpose()?,
+                geometry: raw.geometry.map(|g| geometry_from_value(&g, 0)).transpose()?,
                 properties: raw.properties,
             })
         })
@@ -357,5 +377,29 @@ mod tests {
     fn rejects_unknown_geometry_type() {
         let result = parse_geometry(r#"{"type": "Sphere", "coordinates": [0.0, 0.0]}"#);
         assert!(matches!(result, Err(GeoJsonError::InvalidGeometry(_))));
+    }
+
+    #[test]
+    fn rejects_non_finite_coordinate() {
+        // JSON has no literal NaN/Infinity, but an overflowing exponent (e.g. 1e999)
+        // parses to f64::INFINITY. The finiteness guard must reject it (or, if the
+        // JSON layer rejects the literal first, that is also an error — either way the
+        // coordinate is never accepted as a finite point).
+        let r = parse_geometry(r#"{"type": "Point", "coordinates": [0.0, 1e999]}"#);
+        assert!(matches!(r, Err(GeoJsonError::NonFiniteCoordinate) | Err(GeoJsonError::Json(_))));
+    }
+
+    #[test]
+    fn rejects_excessive_nesting_depth() {
+        let mut json = String::new();
+        for _ in 0..50 {
+            json.push_str(r#"{"type":"GeometryCollection","geometries":["#);
+        }
+        json.push_str(r#"{"type":"Point","coordinates":[0.0,0.0]}"#);
+        for _ in 0..50 {
+            json.push(']');
+            json.push('}');
+        }
+        assert!(matches!(parse_geometry(&json), Err(GeoJsonError::MaxNestingDepth)));
     }
 }

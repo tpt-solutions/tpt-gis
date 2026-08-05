@@ -6,8 +6,18 @@ members = [
     "tpt-gis-raster",
     "tpt-gis-io",
     "tpt-gis-index",
+    "tpt-gis",
     "examples/drone-geofence-demo",
     "examples/spatial-join-cli",
+]
+# Standalone packages that build for a special target / toolchain and must not be
+# part of `cargo build --workspace` (or the host build would fail):
+# - WASM geofence demo (cdylib, wasm32 only)
+# - cargo-fuzz harnesses (each needs nightly + cargo-fuzz)
+exclude = [
+    "examples/wasm-geofence-demo",
+    "tpt-gis-io/fuzz",
+    "tpt-gis-raster/fuzz",
 ]
 
 [workspace.package]

@@ -232,10 +232,13 @@ fn choose_subtree<E>(children: &[(Rect, E)], bbox: &Rect) -> usize {
     best_idx
 }
 
+/// The two groups produced by [`quadratic_split`].
+type Split<E> = (Vec<(Rect, E)>, Vec<(Rect, E)>);
+
 /// Guttman's quadratic-cost split: partitions `entries` (which must number
 /// `MAX_ENTRIES + 1`, i.e. one over the limit) into two non-empty groups, each
 /// with at least [`MIN_ENTRIES`] members.
-fn quadratic_split<E>(mut entries: Vec<(Rect, E)>) -> (Vec<(Rect, E)>, Vec<(Rect, E)>) {
+fn quadratic_split<E>(mut entries: Vec<(Rect, E)>) -> Split<E> {
     debug_assert_eq!(entries.len(), MAX_ENTRIES + 1);
 
     // PickSeeds: the pair that would waste the most area if grouped together.

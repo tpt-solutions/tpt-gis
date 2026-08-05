@@ -89,11 +89,9 @@ impl fmt::Display for RasterError {
             RasterError::OutOfBounds { x, y, width, height } => {
                 write!(f, "cell ({x}, {y}) is outside a {width}x{height} grid")
             }
-            RasterError::ShapeMismatch { lhs, rhs } => write!(
-                f,
-                "grid size mismatch: {}x{} vs {}x{}",
-                lhs.0, lhs.1, rhs.0, rhs.1
-            ),
+            RasterError::ShapeMismatch { lhs, rhs } => {
+                write!(f, "grid size mismatch: {}x{} vs {}x{}", lhs.0, lhs.1, rhs.0, rhs.1)
+            }
             RasterError::EmptyOutput { width, height } => {
                 write!(f, "requested output grid {width}x{height} has no cells")
             }
@@ -105,7 +103,10 @@ impl fmt::Display for RasterError {
                 write!(f, "range lower bound is greater than its upper bound")
             }
             RasterError::EvenKernel { width, height } => {
-                write!(f, "convolution kernel {width}x{height} has no centre cell (needs odd sides)")
+                write!(
+                    f,
+                    "convolution kernel {width}x{height} has no centre cell (needs odd sides)"
+                )
             }
         }
     }

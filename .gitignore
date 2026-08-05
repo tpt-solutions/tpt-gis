@@ -1,4 +1,6 @@
 /target/
+# Nested target dirs for excluded/standalone packages (wasm demo, fuzz harnesses).
+**/target/
 **/*.rs.bk
 *.pdb
 Cargo.lock
@@ -9,3 +11,13 @@ Cargo.lock
 
 .DS_Store
 Thumbs.db
+
+# Stray build/test logs
+*.log
+
+# cargo-fuzz outputs
+**/corpus/
+**/artifacts/
+
+# wasm-bindgen / wasm-pack output
+**/pkg/

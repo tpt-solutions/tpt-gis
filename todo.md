@@ -198,6 +198,87 @@ Source design doc: `spec.txt`.
 
 ---
 
+## Security Audit & Correctness Fixes (2026-08 review)
+
+Found during a full project review (security audit + stub/todo sweep). See
+`CLAUDE.md`'s crate table and the sections below for context — several of
+these are things a previous pass marked `[x]` done that don't actually work.
+
+### Security fixes (untrusted-input parsers)
+- [x] GeoTIFF allocation/decompression bomb — `decode_window` allocates
+      `width*height*bytes_per_sample` unbounded from IFD tags; `decompress`'s
+      `expected` size cap is computed but never used (`tpt-gis-raster/src/geotiff.rs`)
+- [x] HTTP range-response validation — `HttpTransport::fetch_range` accepts any
+      2xx status and any response length with no cap; `len == 0` underflows a
+      `u64` subtraction (`tpt-gis-raster/src/http.rs`)
+- [x] Shapefile allocation bomb — `num_parts`/`num_points`/`num_records` used
+      to pre-allocate before validation against remaining buffer length
+      (`tpt-gis-io/src/shapefile.rs`)
+- [x] Unbounded recursion on `Multi*`/`GeometryCollection` nesting in
+      `tpt-gis-io/src/wkb.rs`, `wkt.rs`, and `geojson.rs` — add a shared
+      max-nesting-depth guard to all three
+- [x] Reject non-finite (`NaN`/`Infinity`) coordinates at the WKB/WKT/GeoJSON
+      parser boundary, mirroring `tpt-gis-index/src/h3.rs`'s existing check —
+      closes a panic path in `tpt-gis-index/src/rtree.rs`
+
+### Correctness fixes (marked done, don't work)
+- [x] `ShpGeometryIter` discards every parsed geometry and returns `None`
+      immediately — streaming shapefile reader is non-functional
+      (`tpt-gis-io/src/shapefile.rs`)
+- [x] `tpt-gis-index/src/s2.rs` fails its own unit tests and doctest — three
+      independent bit-math bugs (`ij()`/`from_face_ij()` transposition, missing
+      inverse quadratic transform in `from_lat_lon`, wrong axis formulas in
+      `face_uv_from_xyz` on faces 3/4/5); also soften the "same ids/tokens as
+      Google's S2" doc claim (it's a Z-order curve, not Hilbert — not
+      bit-compatible) rather than fabricate a reference test vector
+  - [ ] (deferred, separate future pass) real Hilbert-curve/orientation-table
+        S2 compatibility + variable-length token format, if byte-compatibility
+        with Google's S2 is ever actually needed
+- [x] `tpt-gis-io` fuzz harness doesn't compile — wrong dependency
+      (`cargo-fuzz` instead of `libfuzzer-sys`) and two targets call
+      nonexistent functions (`parse_wkb`/`parse_wkt` vs. real `parse_geometry`);
+      not wired into CI either
+- [x] No fuzz target exists for `tpt-gis-raster`'s GeoTIFF/COG parser — added one
+
+### Documentation reconciliation
+- [x] `CLAUDE.md` crate table is stale (calls `tpt-gis-io`/`-index`/`-raster`
+      stubs) and misstates the lint config (claims `clippy::pedantic` is
+      enforced; only `clippy::all` is)
+- [x] `todo.md` (this file) self-contradicts: Cross-Cutting section below still
+      says "`tpt-gis-raster` is still an empty stub" while Phase 3 above
+      correctly describes it as substantially complete — fix once the raster
+      fixes above land
+- [x] `CHANGELOG.md`'s `[0.1.0]` link points at a release tag that was never
+      pushed (404)
+- [x] `.gitignore` doesn't exclude `*.log` — stray `build.log`/`test_*.log`
+      files sit untracked at repo root
+
+### Adoption tooling
+- [x] README doesn't link `examples/spatial-join-cli` or
+      `examples/drone-geofence-demo` — no path from README to either
+- [x] No crate sets `keywords`/`categories` in `Cargo.toml` (hurts crates.io
+      discoverability); not on `PUBLISHING.md`'s checklist either
+- [x] `examples/spatial-join-cli` has no crate-local `README.md`
+- [x] `examples/spatial-join-cli/src/main.rs` uses `.expect()` throughout for
+      file I/O/parsing — raw panics instead of clean CLI error exit
+- [x] `tpt-gis-io/src/shapefile.rs`'s `trimmed_ascii` silently turns non-UTF-8
+      `.dbf` Character fields (common in the wild) into an empty string
+      instead of lossily decoding them
+- [x] CI's `no_std` job builds a `wasm32-wasi` target that no longer exists on
+      current stable Rust (renamed to `wasm32-wasip1`/`wasm32-wasip2`) — fix in
+      `rust-toolchain.toml` and `.github/workflows/ci.yml`
+
+### New features
+- [x] `tpt-gis` facade crate — single-dependency, feature-gated re-export of
+      all five `tpt-gis-*` crates, `http` opt-in (pulls in reqwest/tokio),
+      published last per `PUBLISHING.md`
+- [x] Browser WASM demo (`examples/wasm-geofence-demo`) — reuses
+      `examples/drone-geofence-demo`'s existing `check_position` logic via a
+      `wasm-bindgen` layer + a dependency-free static `index.html`/canvas
+      harness; linked from the root README
+
+---
+
 ## Cross-Cutting / Infrastructure
 
 - [x] CI: std targets (Linux/macOS/Windows) — workflow configured
@@ -212,17 +293,19 @@ Source design doc: `spec.txt`.
       GitHub Actions runners don't have preinstalled; needs a dedicated setup step
       if added
 - [x] Unit tests per crate (`tpt-gis-core`, `tpt-gis-geom`, `tpt-gis-io`,
-      `tpt-gis-index`, `drone-geofence-demo`; `tpt-gis-raster` is still an empty stub)
+      `tpt-gis-index`, `drone-geofence-demo`;        `tpt-gis-raster` is still an empty stub — this is now obsolete: Phase 3
+       above correctly describes it as substantially complete)
 - [x] Property-based tests (proptest) for geometry/geodesic invariants
 - [x] Golden / reference-vector correctness tests (Vincenty test vector; UTM
       central-meridian provable invariant)
 - [x] Benchmark harness (criterion) — added for the MVP 2 geofence check;
       not yet applied workspace-wide as a regression-tracking suite
 - [x] Fuzzing harness (cargo-fuzz) for `tpt-gis-io` parsers (geojson, wkb, wkt, shapefile)
-- [ ] Fuzzing harness (cargo-fuzz) for `tpt-gis-raster` parser (crate is still a stub)
-- [ ] Rustdoc coverage across all crates (currently compliant for `tpt-gis-core`
-      and `tpt-gis-geom` — `missing_docs` warns with zero violations — but the
-      stub crates have no real API surface yet to document)
+- [x] Fuzzing harness (cargo-fuzz) for `tpt-gis-raster` parser (GeoTIFF/COG) — added
+      under `tpt-gis-raster/fuzz`, wired into CI
+- [x] Rustdoc coverage across all crates — `missing_docs` warns with zero
+      violations on `tpt-gis-core`, `tpt-gis-geom`, `tpt-gis-io`, `tpt-gis-index`,
+      `tpt-gis-raster`, and the `tpt-gis` facade (verified via `cargo doc`)
 - [x] docs.rs configuration
 - [x] User-guide site (`docs/` directory with getting-started and CLI usage guides)
 - [x] Semver policy documented

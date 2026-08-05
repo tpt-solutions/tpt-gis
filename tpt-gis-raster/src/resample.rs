@@ -223,7 +223,8 @@ pub fn resample_to<T: CellType>(
     if width == 0 || height == 0 {
         return Err(RasterError::EmptyOutput { width, height });
     }
-    let count = width.checked_mul(height).ok_or(RasterError::DimensionsTooLarge { width, height })?;
+    let count =
+        width.checked_mul(height).ok_or(RasterError::DimensionsTooLarge { width, height })?;
 
     let fill = source.nodata_or_zero();
     let mut cells = Vec::with_capacity(count);
@@ -366,8 +367,9 @@ mod tests {
     #[test]
     fn bilinear_refuses_a_partial_stencil() {
         let cells = vec![1.0f32, 2.0, 3.0, f32::NAN];
-        let band = Band::new(Grid::new(2, 2, cells).unwrap(), GeoTransform::new(0.0, 2.0, 1.0, 1.0))
-            .with_nodata(f32::NAN);
+        let band =
+            Band::new(Grid::new(2, 2, cells).unwrap(), GeoTransform::new(0.0, 2.0, 1.0, 1.0))
+                .with_nodata(f32::NAN);
         // Dead centre: all four cells contribute, one of them nodata.
         assert_eq!(sample_bilinear(&band, 1.0, 1.0), None);
         // At the exact top-left corner the bilinear stencil still reaches across
@@ -390,29 +392,26 @@ mod tests {
     #[test]
     fn average_skips_nodata_within_a_block() {
         let cells = vec![1.0f32, 3.0, -1.0, -1.0];
-        let band = Band::new(Grid::new(2, 2, cells).unwrap(), GeoTransform::new(0.0, 2.0, 1.0, 1.0))
-            .with_nodata(-1.0);
+        let band =
+            Band::new(Grid::new(2, 2, cells).unwrap(), GeoTransform::new(0.0, 2.0, 1.0, 1.0))
+                .with_nodata(-1.0);
         let overview = downsample(&band, 2, Resampling::Average).unwrap();
         assert_eq!(overview.grid().cells(), &[2.0]);
     }
 
     #[test]
     fn a_fully_nodata_block_stays_nodata() {
-        let band = Band::new(
-            Grid::filled(2, 2, -1.0f32).unwrap(),
-            GeoTransform::new(0.0, 2.0, 1.0, 1.0),
-        )
-        .with_nodata(-1.0);
+        let band =
+            Band::new(Grid::filled(2, 2, -1.0f32).unwrap(), GeoTransform::new(0.0, 2.0, 1.0, 1.0))
+                .with_nodata(-1.0);
         let overview = downsample(&band, 2, Resampling::Average).unwrap();
         assert_eq!(overview.grid().cells(), &[-1.0]);
     }
 
     #[test]
     fn downsampling_rounds_the_size_up_like_gdal_overviews() {
-        let band = Band::new(
-            Grid::filled(5, 3, 1u8).unwrap(),
-            GeoTransform::new(0.0, 3.0, 1.0, 1.0),
-        );
+        let band =
+            Band::new(Grid::filled(5, 3, 1u8).unwrap(), GeoTransform::new(0.0, 3.0, 1.0, 1.0));
         let overview = downsample(&band, 2, Resampling::Nearest).unwrap();
         assert_eq!((overview.width(), overview.height()), (3, 2));
         assert!(downsample(&band, 0, Resampling::Nearest).is_err());
@@ -462,7 +461,10 @@ mod tests {
             resample(&band, 0, 4, Resampling::Nearest).unwrap_err(),
             RasterError::EmptyOutput { width: 0, height: 4 }
         );
-        let empty = Band::new(Grid::<f32>::filled(0, 4, 0.0).unwrap(), GeoTransform::new(0.0, 0.0, 1.0, 1.0));
+        let empty = Band::new(
+            Grid::<f32>::filled(0, 4, 0.0).unwrap(),
+            GeoTransform::new(0.0, 0.0, 1.0, 1.0),
+        );
         assert_eq!(
             resample(&empty, 2, 2, Resampling::Nearest).unwrap_err(),
             RasterError::EmptyInput

@@ -8,6 +8,8 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
+keywords = ["gis", "spatial-index", "rtree", "h3", "geospatial"]
+categories = ["science::geo", "algorithms", "data-structures"]
 
 [lints]
 workspace = true

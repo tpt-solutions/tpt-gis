@@ -36,7 +36,7 @@ jobs:
       # see todo.md.
       - run: cargo build -p tpt-gis-core -p tpt-gis-geom --target riscv32imc-unknown-none-elf
       - run: cargo build -p tpt-gis-core -p tpt-gis-geom --target wasm32-unknown-unknown
-      - run: cargo build -p tpt-gis-core -p tpt-gis-geom --target wasm32-wasi
+      - run: cargo build -p tpt-gis-core -p tpt-gis-geom --target wasm32-wasip1
       # The MVP 2 demo's own check_position logic (not just tpt-gis-core/geom) is
       # no_std-portable too, so it's ready to drop into real ESP32-C3 firmware.
       - run: cargo build -p drone-geofence-demo --lib --no-default-features --target riscv32imc-unknown-none-elf
@@ -67,3 +67,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: EmbarkStudios/cargo-deny-action@v2
+
+  fuzz:
+    name: cargo-fuzz (compile fuzz targets)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - run: cargo install cargo-fuzz
+      - name: Build tpt-gis-io fuzz targets
+        run: cargo fuzz build -O
+        working-directory: tpt-gis-io/fuzz
+      - name: Build tpt-gis-raster fuzz targets
+        run: cargo fuzz build -O
+        working-directory: tpt-gis-raster/fuzz

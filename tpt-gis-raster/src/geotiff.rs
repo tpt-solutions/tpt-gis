@@ -90,7 +90,10 @@ impl fmt::Display for GeoTiffError {
             GeoTiffError::BadByteOrder => write!(f, "TIFF byte order must be 'II' or 'MM'"),
             GeoTiffError::BadMagic(value) => write!(f, "unknown TIFF magic number {value}"),
             GeoTiffError::Truncated { offset, len, file_len } => {
-                write!(f, "TIFF references {len} bytes at offset {offset}, past source end {file_len}")
+                write!(
+                    f,
+                    "TIFF references {len} bytes at offset {offset}, past source end {file_len}"
+                )
             }
             GeoTiffError::UnknownType(value) => write!(f, "unknown TIFF field type code {value}"),
             GeoTiffError::Unsupported(what) => write!(f, "unsupported TIFF feature: {what}"),
@@ -99,7 +102,9 @@ impl fmt::Display for GeoTiffError {
             }
             GeoTiffError::SizeMismatch(what) => write!(f, "TIFF size mismatch: {what}"),
             GeoTiffError::Decompress(what) => write!(f, "TIFF decompression failed: {what}"),
-            GeoTiffError::BadGeoreferencing(what) => write!(f, "bad GeoTIFF georeferencing: {what}"),
+            GeoTiffError::BadGeoreferencing(what) => {
+                write!(f, "bad GeoTIFF georeferencing: {what}")
+            }
             GeoTiffError::NotFetched(offset) => {
                 write!(f, "TIFF byte range at offset {offset} was not fetched")
             }
@@ -185,25 +190,6 @@ impl Entry {
         }
     }
 
-    fn as_u64(&self, little: bool) -> Option<u64> {
-        match self.type_code {
-            TYPE_SHORT | TYPE_SSHORT => u16::from_bytes(&self.value, little).map(u64::from),
-            TYPE_LONG | TYPE_SLONG => u32::from_bytes(&self.value, little).map(u64::from),
-            TYPE_LONG8 | TYPE_SLONG8 => u64::from_bytes(&self.value, little),
-            _ => None,
-        }
-    }
-
-    fn as_f64(&self, little: bool) -> Option<f64> {
-        match self.type_code {
-            TYPE_SHORT | TYPE_SSHORT => u16::from_bytes(&self.value, little).map(f64::from),
-            TYPE_LONG | TYPE_SLONG => u32::from_bytes(&self.value, little).map(f64::from),
-            TYPE_FLOAT => f32::from_bytes(&self.value, little).map(f64::from),
-            TYPE_DOUBLE => f64::from_bytes(&self.value, little),
-            _ => None,
-        }
-    }
-
     fn as_f64s(&self, little: bool) -> Option<Vec<f64>> {
         if self.type_code != TYPE_DOUBLE {
             return None;
@@ -274,18 +260,21 @@ struct ImageInfo {
     sample_format: u16,
     compression: u16,
     predictor: u16,
-    planar_config: u16,
-    samples_per_pixel: u16,
     layout: Layout,
     chunks: Vec<(u64, u64)>,
     geo_transform: Option<GeoTransform>,
     epsg: Option<u32>,
     nodata: Option<f64>,
-    ifd_offset: u64,
     subifds: Vec<u64>,
     internal_tiling: bool,
     last_data_offset: u64,
 }
+
+/// The maximum number of decoded bytes a single `decode_window` call is allowed to
+/// allocate. This bounds the impact of a hostile TIFF whose header declares an
+/// enormous `ImageWidth`/`ImageLength`/`BitsPerSample` (otherwise `vec![0; w*h*bpp]`
+/// would attempt an unbounded allocation).
+const MAX_DECODE_BYTES: usize = 1 << 30; // 1 GiB
 
 /// A parsed (Geo)TIFF. All byte access goes through `fetch`, so the same struct
 /// serves an in-memory file and (via a closure backed by HTTP range requests) a
@@ -543,7 +532,7 @@ impl GeoTiff {
     }
 
     /// Turns a parsed IFD into full decoding parameters.
-    fn image_info_from(&self, ifd: &EntryMap, ifd_offset: u64) -> Result<ImageInfo> {
+    fn image_info_from(&self, ifd: &EntryMap, _ifd_offset: u64) -> Result<ImageInfo> {
         let width = ifd
             .get(256)
             .and_then(|e| e.as_u32(self.little))
@@ -600,10 +589,8 @@ impl GeoTiff {
             .and_then(|e| e.as_str())
             .and_then(|s| s.trim().parse::<f64>().ok());
 
-        let subifds = ifd
-            .get(TAG_SUB_IFDS)
-            .map(|e| integer_list(e, self.little))
-            .unwrap_or_default();
+        let subifds =
+            ifd.get(TAG_SUB_IFDS).map(|e| integer_list(e, self.little)).unwrap_or_default();
 
         let internal_tiling = chunks.windows(2).all(|pair| pair[0].0 < pair[1].0);
         let last_data_offset = chunks.iter().map(|(o, c)| o + c).max().unwrap_or(0);
@@ -615,14 +602,11 @@ impl GeoTiff {
             sample_format,
             compression,
             predictor,
-            planar_config,
-            samples_per_pixel,
             layout,
             chunks,
             geo_transform,
             epsg,
             nodata,
-            ifd_offset,
             subifds,
             internal_tiling,
             last_data_offset,
@@ -674,19 +658,32 @@ impl GeoTiff {
         // interpretation.
         let out_w = x1 - x0;
         let out_h = y1 - y0;
-        let mut buffer = vec![0u8; out_w * out_h * bytes_per_sample];
+        let total_bytes = out_w
+            .checked_mul(out_h)
+            .and_then(|v| v.checked_mul(bytes_per_sample))
+            .ok_or(GeoTiffError::SizeMismatch("decoded window dimensions overflow"))?;
+        if total_bytes > MAX_DECODE_BYTES {
+            return Err(GeoTiffError::SizeMismatch("decoded window exceeds size limit"));
+        }
+        let mut buffer = vec![0u8; total_bytes];
 
         let tx0 = x0 / chunk_w;
         let ty0 = y0 / chunk_h;
-        let tx1 = (x1 + chunk_w - 1) / chunk_w;
-        let ty1 = (y1 + chunk_h - 1) / chunk_h;
+        let tx1 = x1.div_ceil(chunk_w);
+        let ty1 = y1.div_ceil(chunk_h);
 
         for ty in ty0..ty1.min(tiles_y) {
             for tx in tx0..tx1.min(tiles_x) {
                 let chunk_index = ty * tiles_x + tx;
                 let (offset, byte_count) = info.chunks[chunk_index];
                 let raw = (self.fetch)(offset, byte_count as usize)?;
-                let expected = chunk_w * chunk_h * bytes_per_sample;
+                let expected = chunk_w
+                    .checked_mul(chunk_h)
+                    .and_then(|v| v.checked_mul(bytes_per_sample))
+                    .ok_or(GeoTiffError::SizeMismatch("tile dimensions overflow"))?;
+                if expected > MAX_DECODE_BYTES {
+                    return Err(GeoTiffError::SizeMismatch("tile exceeds decode size limit"));
+                }
                 let mut decoded = decompress(&raw, info.compression, expected)?;
 
                 let cw = chunk_w.min(width.saturating_sub(tx * chunk_w));
@@ -709,7 +706,8 @@ impl GeoTiff {
                 for row in row_lo..row_hi {
                     let src_row = row - ty * chunk_h;
                     let src_start = (src_row * chunk_w + src_col0) * bytes_per_sample;
-                    let src = &decoded[src_start..src_start + (src_col1 - src_col0) * bytes_per_sample];
+                    let src =
+                        &decoded[src_start..src_start + (src_col1 - src_col0) * bytes_per_sample];
                     let dest_row = row - y0;
                     let dest_col = col_lo - x0;
                     let dest_start = (dest_row * out_w + dest_col) * bytes_per_sample;
@@ -718,9 +716,8 @@ impl GeoTiff {
             }
         }
 
-        let transform = info.geo_transform.unwrap_or_else(|| {
-            GeoTransform::new(0.0, (y1) as f64, 1.0, 1.0)
-        });
+        let transform =
+            info.geo_transform.unwrap_or_else(|| GeoTransform::new(0.0, (y1) as f64, 1.0, 1.0));
         // Shift the origin so the window's top-left corner keeps its world
         // position from the full image.
         let transform = shift_transform(transform, x0, y0);
@@ -761,8 +758,7 @@ fn clamp_window(
 /// of the full image.
 fn shift_transform(t: GeoTransform, dx: usize, dy: usize) -> GeoTransform {
     let (wx, wy) = t.cell_to_world(dx as f64, dy as f64);
-    GeoTransform::try_new(wx, wy, t.pixel_width(), t.pixel_height())
-        .unwrap_or(t)
+    GeoTransform::try_new(wx, wy, t.pixel_width(), t.pixel_height()).unwrap_or(t)
 }
 
 /// A parsed IFD plus the offset chain pointer.
@@ -810,9 +806,11 @@ fn slice_at(data: &[u8], offset: u64, len: usize) -> Result<Vec<u8>> {
         len,
         file_len: data.len() as u64,
     })?;
-    data.get(start..end)
-        .map(|s| s.to_vec())
-        .ok_or(GeoTiffError::Truncated { offset, len, file_len: data.len() as u64 })
+    data.get(start..end).map(|s| s.to_vec()).ok_or(GeoTiffError::Truncated {
+        offset,
+        len,
+        file_len: data.len() as u64,
+    })
 }
 
 /// Reads an entry's value as a list of `u64` (offsets / byte counts).
@@ -828,17 +826,18 @@ fn integer_list(entry: &Entry, little: bool) -> Vec<u64> {
             .chunks_exact(4)
             .filter_map(|c| u32::from_bytes(c, little).map(u64::from))
             .collect(),
-        TYPE_LONG8 | TYPE_SLONG8 => entry
-            .value
-            .chunks_exact(8)
-            .filter_map(|c| u64::from_bytes(c, little))
-            .collect(),
+        TYPE_LONG8 | TYPE_SLONG8 => {
+            entry.value.chunks_exact(8).filter_map(|c| u64::from_bytes(c, little)).collect()
+        }
         _ => Vec::new(),
     }
 }
 
 /// Extracts the [`GeoTransform`] and EPSG code from the GeoTIFF geo-key tags.
-fn read_georeferencing(ifd: &EntryMap, little: bool) -> Result<(Option<GeoTransform>, Option<u32>)> {
+fn read_georeferencing(
+    ifd: &EntryMap,
+    little: bool,
+) -> Result<(Option<GeoTransform>, Option<u32>)> {
     let mut epsg = None;
     if let Some(dir) = ifd.get(TAG_GEO_KEY_DIRECTORY) {
         if let Some(shorts) = dir.as_u16s(little) {
@@ -859,9 +858,9 @@ fn read_georeferencing(ifd: &EntryMap, little: bool) -> Result<(Option<GeoTransf
     }
 
     if let Some(transform) = ifd.get(TAG_MODEL_TRANSFORMATION) {
-        let m = transform.as_f64s(little).ok_or(GeoTiffError::BadGeoreferencing(
-            "ModelTransformationTag is not 16 doubles",
-        ))?;
+        let m = transform
+            .as_f64s(little)
+            .ok_or(GeoTiffError::BadGeoreferencing("ModelTransformationTag is not 16 doubles"))?;
         if m.len() < 16 {
             return Err(GeoTiffError::BadGeoreferencing("truncated ModelTransformationTag"));
         }
@@ -974,37 +973,60 @@ fn nodata_to_cell(value: f64, sample_format: u16, bits: u16) -> Option<f64> {
     }
 }
 
-/// Decompresses one strip/tile's raw bytes, given the compression scheme.
-fn decompress(raw: &[u8], compression: u16, _expected: usize) -> Result<Vec<u8>> {
+/// Decompresses one strip/tile's raw bytes, given the compression scheme, and
+/// bounds the output to at most `expected` bytes — the size the header declares
+/// this strip/tile should decode to. This is the guard against a decompression
+/// bomb: a tiny hostile payload that inflates to gigabytes of output can no longer
+/// exhaust memory, because the decoder is allowed to produce at most `expected`
+/// bytes (plus one, to detect the over-long case and error rather than silently
+/// truncate).
+fn decompress(raw: &[u8], compression: u16, expected: usize) -> Result<Vec<u8>> {
     match compression {
-        COMPRESSION_NONE => Ok(raw.to_vec()),
-        COMPRESSION_PACKBITS => decode_packbits(raw),
-        COMPRESSION_DEFLATE | COMPRESSION_DEFLATE_PK => decode_deflate(raw),
-        COMPRESSION_LZW => decode_lzw(raw),
+        COMPRESSION_NONE => {
+            if raw.len() != expected {
+                return Err(GeoTiffError::SizeMismatch("uncompressed size mismatch"));
+            }
+            Ok(raw.to_vec())
+        }
+        COMPRESSION_PACKBITS => decode_packbits(raw, expected),
+        COMPRESSION_DEFLATE | COMPRESSION_DEFLATE_PK => decode_deflate(raw, expected),
+        COMPRESSION_LZW => decode_lzw(raw, expected),
         _ => Err(GeoTiffError::Unsupported("compression scheme")),
     }
 }
 
 /// Inflates a DEFLATE stream using the pure-Rust `miniz_oxide` backend of
-/// `flate2` (no C library, per the project's zero-FFI rule).
-fn decode_deflate(raw: &[u8]) -> Result<Vec<u8>> {
+/// `flate2` (no C library, per the project's zero-FFI rule). The decoder is wrapped
+/// in a `Take` so it can read at most `expected + 1` bytes, bounding the allocated
+/// output even when the stream is maliciously over-long.
+fn decode_deflate(raw: &[u8], expected: usize) -> Result<Vec<u8>> {
     use std::io::Read;
-    let mut decoder = flate2::read::DeflateDecoder::new(raw);
-    let mut out = Vec::with_capacity(raw.len() * 2);
-    decoder
-        .read_to_end(&mut out)
-        .map_err(|_| GeoTiffError::Decompress("DEFLATE"))?;
+    let decoder = flate2::read::DeflateDecoder::new(raw);
+    let mut limited = decoder.take((expected as u64).saturating_add(1));
+    let mut out = Vec::with_capacity(expected.min(1 << 20));
+    limited.read_to_end(&mut out).map_err(|_| GeoTiffError::Decompress("DEFLATE"))?;
+    if out.len() > expected {
+        return Err(GeoTiffError::SizeMismatch("DEFLATE output exceeds declared size"));
+    }
     Ok(out)
 }
 
-/// Decodes a TIFF LZW stream (early-change variant) via `weezl`.
-fn decode_lzw(raw: &[u8]) -> Result<Vec<u8>> {
+/// Decodes a TIFF LZW stream (early-change variant) via `weezl`. The decoded length
+/// is checked against `expected` so an over-long stream cannot masquerade as valid
+/// pixel data.
+fn decode_lzw(raw: &[u8], expected: usize) -> Result<Vec<u8>> {
     let mut decoder = weezl::decode::Decoder::with_tiff_size_switch(weezl::BitOrder::Msb, 8);
-    decoder.decode(raw).map_err(|_| GeoTiffError::Decompress("LZW"))
+    let decoded = decoder.decode(raw).map_err(|_| GeoTiffError::Decompress("LZW"))?;
+    if decoded.len() > expected {
+        return Err(GeoTiffError::SizeMismatch("LZW output exceeds declared size"));
+    }
+    Ok(decoded)
 }
 
-/// Decodes a PackBits run-length-encoded strip/tile.
-fn decode_packbits(raw: &[u8]) -> Result<Vec<u8>> {
+/// Decodes a PackBits run-length-encoded strip/tile. PackBits output is inherently
+/// bounded by roughly 128× the input, but the result is still checked against
+/// `expected`.
+fn decode_packbits(raw: &[u8], expected: usize) -> Result<Vec<u8>> {
     let mut out = Vec::with_capacity(raw.len());
     let mut i = 0;
     while i < raw.len() {
@@ -1026,6 +1048,9 @@ fn decode_packbits(raw: &[u8]) -> Result<Vec<u8>> {
             out.extend(core::iter::repeat(byte).take(count));
             i += 1;
         }
+    }
+    if out.len() > expected {
+        return Err(GeoTiffError::SizeMismatch("PackBits output exceeds declared size"));
     }
     Ok(out)
 }
@@ -1066,11 +1091,8 @@ fn undo_predictor(
                 for p in 1..chunk_w {
                     for k in 0..bytes_per_sample {
                         let cur = base + p * bytes_per_sample + k;
-                        let (src_p, src_k) = if k == 0 {
-                            (p - 1, bytes_per_sample - 1)
-                        } else {
-                            (p - 1, k - 1)
-                        };
+                        let (src_p, src_k) =
+                            if k == 0 { (p - 1, bytes_per_sample - 1) } else { (p - 1, k - 1) };
                         let prev = base + src_p * bytes_per_sample + src_k;
                         data[cur] = data[cur].wrapping_add(data[prev]);
                     }
@@ -1195,7 +1217,7 @@ pub mod testsupport {
         let width = 2u16;
         let height = 2u16;
         let bits = 8u16;
-        let compression = COMPRESSION_NONE as u16;
+        let compression = COMPRESSION_NONE;
         let photometric = 1u16;
         let strip_offset = 8u32 + 2 + 12 * 7 + 4; // header + count + entries + next-ifd
         let pixel_data: [u8; 4] = [10, 20, 30, 40];
@@ -1232,7 +1254,12 @@ pub mod testsupport {
     /// Builds a stripped, little-endian, single-band `u8` TIFF whose single strip
     /// is encoded with the given compression scheme, so the decoder's
     /// decompression paths can be exercised.
-    pub fn make_compressed_tiff(compression: u16, pixels: &[u8], width: u16, height: u16) -> Vec<u8> {
+    pub fn make_compressed_tiff(
+        compression: u16,
+        pixels: &[u8],
+        width: u16,
+        height: u16,
+    ) -> Vec<u8> {
         let encoded = match compression {
             COMPRESSION_NONE => pixels.to_vec(),
             COMPRESSION_DEFLATE | COMPRESSION_DEFLATE_PK => deflate_encode(pixels),
@@ -1278,15 +1305,14 @@ pub mod testsupport {
 
     fn deflate_encode(data: &[u8]) -> Vec<u8> {
         use std::io::Write;
-        let mut encoder = flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
+        let mut encoder =
+            flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
         encoder.write_all(data).unwrap();
         encoder.finish().unwrap()
     }
 
     fn lzw_encode(data: &[u8]) -> Vec<u8> {
-        weezl::encode::Encoder::new(weezl::BitOrder::Msb, 8)
-            .encode(data)
-            .expect("lzw encode")
+        weezl::encode::Encoder::new(weezl::BitOrder::Msb, 8).encode(data).expect("lzw encode")
     }
 
     fn packbits_encode(data: &[u8]) -> Vec<u8> {
@@ -1492,10 +1518,10 @@ mod tests {
     fn reads_compressed_strip_variants() {
         let expected = pixels();
         for (name, compression) in [
-            ("none", COMPRESSION_NONE as u16),
-            ("deflate", COMPRESSION_DEFLATE as u16),
-            ("lzw", COMPRESSION_LZW as u16),
-            ("packbits", COMPRESSION_PACKBITS as u16),
+            ("none", COMPRESSION_NONE),
+            ("deflate", COMPRESSION_DEFLATE),
+            ("lzw", COMPRESSION_LZW),
+            ("packbits", COMPRESSION_PACKBITS),
         ] {
             let bytes = testsupport::make_compressed_tiff(compression, &expected, 4, 3);
             let band = GeoTiff::parse(&bytes).unwrap().read().unwrap();
@@ -1507,7 +1533,7 @@ mod tests {
     #[test]
     fn reads_a_sub_window_of_the_image() {
         let expected = pixels();
-        let bytes = testsupport::make_compressed_tiff(COMPRESSION_NONE as u16, &expected, 4, 3);
+        let bytes = testsupport::make_compressed_tiff(COMPRESSION_NONE, &expected, 4, 3);
         let tiff = GeoTiff::parse(&bytes).unwrap();
         // The 2x2 window at columns [1,3), rows [1,3) is rows 1-2, cols 1-2:
         //   row 1: [4,4]  row 2: [7,7]

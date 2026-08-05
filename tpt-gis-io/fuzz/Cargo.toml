@@ -1,27 +1,36 @@
 [package]
 name = "tpt-gis-io-fuzz"
-version.workspace = true
-edition.workspace = true
+version = "0.0.0"
+edition = "2021"
 publish = false
 
-[workspace]
+[package.metadata]
+cargo-fuzz = true
 
 [dependencies]
-cargo-fuzz = "0.11"
+libfuzzer-sys = "0.4"
 tpt-gis-io = { path = ".." }
 
 [[bin]]
 name = "geojson"
 path = "fuzz_targets/geojson.rs"
+test = false
+doc = false
 
 [[bin]]
 name = "wkb"
 path = "fuzz_targets/wkb.rs"
+test = false
+doc = false
 
 [[bin]]
 name = "wkt"
 path = "fuzz_targets/wkt.rs"
+test = false
+doc = false
 
 [[bin]]
 name = "shapefile"
 path = "fuzz_targets/shapefile.rs"
+test = false
+doc = false

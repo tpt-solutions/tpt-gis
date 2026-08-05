@@ -1,8 +1,7 @@
 #![allow(clippy::missing_docs_in_private_items)]
 
-use tpt_gis_io::wkb::parse_wkb;
-use tpt_gis_io::geometry::Geometry;
+use libfuzzer_sys::fuzz_target;
 
-pub fuzz_target!(|data: &[u8]| {
-    let _ = parse_wkb(data);
+fuzz_target!(|data: &[u8]| {
+    let _ = tpt_gis_io::wkb::parse_geometry(data);
 });

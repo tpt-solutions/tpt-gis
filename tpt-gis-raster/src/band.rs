@@ -344,12 +344,7 @@ impl<T> Band<T> {
     pub fn extent(&self) -> Extent {
         let (width, height) = (self.width() as f64, self.height() as f64);
         let (max_x, min_y) = self.transform.cell_to_world(width, height);
-        Extent {
-            min_x: self.transform.origin_x(),
-            min_y,
-            max_x,
-            max_y: self.transform.origin_y(),
-        }
+        Extent { min_x: self.transform.origin_x(), min_y, max_x, max_y: self.transform.origin_y() }
     }
 
     /// The integer cell containing a world position, or `None` if the position
@@ -442,10 +437,9 @@ impl<T: CellType> Band<T> {
             }
             bounds = Some(match bounds {
                 None => (cell, cell),
-                Some((min, max)) => (
-                    if cell < min { cell } else { min },
-                    if cell > max { cell } else { max },
-                ),
+                Some((min, max)) => {
+                    (if cell < min { cell } else { min }, if cell > max { cell } else { max })
+                }
             });
         }
         bounds
@@ -721,11 +715,9 @@ mod tests {
         assert_eq!(band.min_max(), Some((1, 6)));
         assert_eq!(band.mean(), Some((1.0 + 3.0 + 4.0 + 5.0 + 6.0) / 5.0));
 
-        let all_nodata = Band::new(
-            Grid::filled(2, 2, -9999i16).unwrap(),
-            GeoTransform::new(0.0, 0.0, 1.0, 1.0),
-        )
-        .with_nodata(-9999);
+        let all_nodata =
+            Band::new(Grid::filled(2, 2, -9999i16).unwrap(), GeoTransform::new(0.0, 0.0, 1.0, 1.0))
+                .with_nodata(-9999);
         assert_eq!(all_nodata.min_max(), None);
         assert_eq!(all_nodata.mean(), None);
         assert_eq!(all_nodata.valid_count(), 0);

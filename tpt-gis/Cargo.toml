@@ -1,0 +1,45 @@
+[package]
+name = "tpt-gis"
+description = "Facade crate re-exporting the tpt-gis GIS engine (core, geom, io, index, raster) behind feature flags."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords = ["gis", "geospatial", "geodesy", "geojson", "cog"]
+categories = ["science::geo", "algorithms"]
+
+[lints]
+workspace = true
+
+[features]
+# By default the whole engine is available with host `std` support.
+default = ["std", "core", "geom", "io", "index", "raster"]
+## Enables host `std` math intrinsics for `tpt-gis-core`/`tpt-gis-geom`.
+std = ["tpt-gis-core/std", "tpt-gis-geom/std"]
+## CRS definitions, datum transforms, geodesic math.
+core = ["dep:tpt-gis-core"]
+## Vector geometry + topological predicates.
+geom = ["dep:tpt-gis-geom", "tpt-gis-geom/std"]
+## GeoJSON/WKB/WKT/Shapefile parsers + writers (pulls in `geom`).
+io = ["dep:tpt-gis-io", "geom"]
+## R-Trees, Quadtrees, H3/S2 (pulls in `geom`).
+index = ["dep:tpt-gis-index", "geom"]
+## Grid data, map algebra, COG/GeoTIFF parsing.
+raster = ["dep:tpt-gis-raster"]
+## Enables the async HTTP Range-request streaming reader (pulls in reqwest/tokio via
+## `tpt-gis-raster`'s `http` feature).
+http = ["raster", "tpt-gis-raster/http"]
+
+[dependencies]
+tpt-gis-core = { path = "../tpt-gis-core", default-features = false, optional = true }
+tpt-gis-geom = { path = "../tpt-gis-geom", default-features = false, optional = true }
+tpt-gis-io = { path = "../tpt-gis-io", optional = true }
+tpt-gis-index = { path = "../tpt-gis-index", optional = true }
+tpt-gis-raster = { path = "../tpt-gis-raster", default-features = false, optional = true }
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

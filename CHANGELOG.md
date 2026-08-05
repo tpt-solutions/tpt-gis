@@ -17,4 +17,4 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - CI for std, `no_std`, WASM, and WASI targets
 - `cargo-deny` license/advisory enforcement
 
-[0.1.0]: https://github.com/tpt-solutions/tpt-gis/releases/tag/v0.1.0
+[0.1.0]: https://github.com/tpt-solutions/tpt-gis/commit/4bbd4a7721d0e0a394ba92cadd1c8c882f20392f

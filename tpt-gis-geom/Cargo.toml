@@ -8,6 +8,8 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
+keywords = ["gis", "geometry", "geospatial", "ogc", "polygon"]
+categories = ["science::geo", "algorithms"]
 
 [lints]
 workspace = true

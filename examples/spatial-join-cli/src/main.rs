@@ -94,6 +94,13 @@ enum Commands {
 }
 
 fn main() {
+    if let Err(e) = run() {
+        eprintln!("error: {e}");
+        std::process::exit(1);
+    }
+}
+
+fn run() -> Result<(), String> {
     let cli = Cli::parse();
 
     match cli.command {
@@ -113,15 +120,16 @@ fn run_spatial_join(
     output: Option<String>,
     format: String,
     incremental: bool,
-) {
-    let points_json = std::fs::read_to_string(&points_path).expect("failed to read points file");
-    let polygons_json =
-        std::fs::read_to_string(&polygons_path).expect("failed to read polygons file");
+) -> Result<(), String> {
+    let points_json = std::fs::read_to_string(&points_path)
+        .map_err(|e| format!("failed to read points file: {e}"))?;
+    let polygons_json = std::fs::read_to_string(&polygons_path)
+        .map_err(|e| format!("failed to read polygons file: {e}"))?;
 
-    let points_fc =
-        parse_feature_collection(&points_json).expect("failed to parse points FeatureCollection");
+    let points_fc = parse_feature_collection(&points_json)
+        .map_err(|e| format!("failed to parse points FeatureCollection: {e}"))?;
     let polygons_fc = parse_feature_collection(&polygons_json)
-        .expect("failed to parse polygons FeatureCollection");
+        .map_err(|e| format!("failed to parse polygons FeatureCollection: {e}"))?;
 
     let points: Vec<IndexedPoint<Map<String, Value>>> = points_fc
         .features
@@ -153,19 +161,27 @@ fn run_spatial_join(
     let results = spatial_join(&points, &polygons, config);
 
     let output_text = match format.as_str() {
-        "csv" => write_csv(&results),
+        "csv" => write_csv(&results)?,
         _ => write_geojson(&results),
     };
 
     match &output {
-        Some(path) => std::fs::write(path, output_text).expect("failed to write output file"),
-        None => print!("{}", output_text),
+        Some(path) => std::fs::write(path, output_text)
+            .map_err(|e| format!("failed to write output file: {e}"))?,
+        None => print!("{output_text}"),
     }
+    Ok(())
 }
 
-fn run_generate_fixtures(num_points: usize, num_polygons: usize, seed: u64, output_dir: String) {
+fn run_generate_fixtures(
+    num_points: usize,
+    num_polygons: usize,
+    seed: u64,
+    output_dir: String,
+) -> Result<(), String> {
     let mut rng = StdRng::seed_from_u64(seed);
-    std::fs::create_dir_all(&output_dir).expect("failed to create output directory");
+    std::fs::create_dir_all(&output_dir)
+        .map_err(|e| format!("failed to create output directory: {e}"))?;
 
     let points: Vec<Feature> = (0..num_points)
         .map(|i| Feature {
@@ -203,19 +219,22 @@ fn run_generate_fixtures(num_points: usize, num_polygons: usize, seed: u64, outp
     let polygons_path = format!("{}/polygons_{num_polygons}.geojson", output_dir);
 
     std::fs::write(&points_path, write_feature_collection(&points_fc))
-        .expect("failed to write points file");
+        .map_err(|e| format!("failed to write points file: {e}"))?;
     std::fs::write(&polygons_path, write_feature_collection(&polygons_fc))
-        .expect("failed to write polygons file");
+        .map_err(|e| format!("failed to write polygons file: {e}"))?;
 
     eprintln!("Wrote {points_path}");
     eprintln!("Wrote {polygons_path}");
+    Ok(())
 }
 
-fn run_reproject(input_path: String, crs: String, output: Option<String>) {
-    let json = std::fs::read_to_string(&input_path).expect("failed to read input file");
-    let fc = parse_feature_collection(&json).expect("failed to parse FeatureCollection");
+fn run_reproject(input_path: String, crs: String, output: Option<String>) -> Result<(), String> {
+    let json = std::fs::read_to_string(&input_path)
+        .map_err(|e| format!("failed to read input file: {e}"))?;
+    let fc = parse_feature_collection(&json)
+        .map_err(|e| format!("failed to parse FeatureCollection: {e}"))?;
 
-    let target = parse_crs(&crs);
+    let target = parse_crs(&crs)?;
 
     let features: Vec<Feature> = fc
         .features
@@ -230,27 +249,32 @@ fn run_reproject(input_path: String, crs: String, output: Option<String>) {
     let text = write_feature_collection(&out_fc);
 
     match &output {
-        Some(path) => std::fs::write(path, text).expect("failed to write output file"),
-        None => print!("{}", text),
+        Some(path) => {
+            std::fs::write(path, text).map_err(|e| format!("failed to write output file: {e}"))?
+        }
+        None => print!("{text}"),
     }
+    Ok(())
 }
 
-fn parse_crs(s: &str) -> Crs {
+fn parse_crs(s: &str) -> Result<Crs, String> {
     match s.to_lowercase().as_str() {
-        "web-mercator" => Crs::WebMercator,
+        "web-mercator" => Ok(Crs::WebMercator),
         utm if utm.starts_with("utm-") => {
             let rest = &utm[4..];
             let (num, hem) = if let Some(n) = rest.strip_suffix("n") {
-                (n.parse::<u8>().expect("invalid UTM zone"), true)
+                (n.parse::<u8>().map_err(|_| "invalid UTM zone number".to_string())?, true)
             } else if let Some(n) = rest.strip_suffix("s") {
-                (n.parse::<u8>().expect("invalid UTM zone"), false)
+                (n.parse::<u8>().map_err(|_| "invalid UTM zone number".to_string())?, false)
             } else {
-                rest.parse::<u8>().expect("invalid UTM zone; append 'n' or 's'");
-                return Crs::Utm(Zone::new(rest.parse::<u8>().unwrap(), true));
+                return Err(
+                    "invalid UTM zone; append 'n' or 's' (e.g. utm-18n, utm-33s)".to_string()
+                );
             };
-            Crs::Utm(Zone::new(num, hem))
+            Ok(Crs::Utm(Zone::new(num, hem)))
         }
-        _ => panic!("unsupported target CRS: {s} (supported: web-mercator, utm-18n, utm-33s, ...)"),
+        _ => Err("unsupported target CRS: {s} (supported: web-mercator, utm-18n, utm-33s, ...)"
+            .to_string()),
     }
 }
 
@@ -318,7 +342,7 @@ fn write_geojson(results: &[SpatialJoinResult]) -> String {
     write_feature_collection(&fc)
 }
 
-fn write_csv(results: &[SpatialJoinResult]) -> String {
+fn write_csv(results: &[SpatialJoinResult]) -> Result<String, String> {
     let mut wtr = csv::Writer::from_writer(vec![]);
     for r in results {
         let mut row = csv::StringRecord::new();
@@ -327,7 +351,8 @@ fn write_csv(results: &[SpatialJoinResult]) -> String {
         for (_k, v) in &r.point_payload {
             row.push_field(&v.to_string());
         }
-        let _ = wtr.write_record(&row);
+        wtr.write_record(&row).map_err(|e| format!("failed to write csv record: {e}"))?;
     }
-    String::from_utf8(wtr.into_inner().unwrap()).unwrap()
+    let bytes = wtr.into_inner().map_err(|e| format!("failed to finalize csv output: {e}"))?;
+    String::from_utf8(bytes).map_err(|e| format!("csv output is not valid utf8: {e}"))
 }

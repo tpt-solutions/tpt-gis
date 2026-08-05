@@ -122,9 +122,7 @@ impl<T> Grid<T> {
     pub fn set(&mut self, x: usize, y: usize, value: T) -> Result<(), RasterError> {
         let width = self.width;
         let height = self.height;
-        let slot = self
-            .get_mut(x, y)
-            .ok_or(RasterError::OutOfBounds { x, y, width, height })?;
+        let slot = self.get_mut(x, y).ok_or(RasterError::OutOfBounds { x, y, width, height })?;
         *slot = value;
         Ok(())
     }
@@ -242,19 +240,13 @@ mod tests {
     #[test]
     fn new_rejects_a_mismatched_cell_count() {
         let error = Grid::new(3, 2, vec![0u8; 5]).unwrap_err();
-        assert_eq!(
-            error,
-            RasterError::CellCountMismatch { width: 3, height: 2, cells: 5 }
-        );
+        assert_eq!(error, RasterError::CellCountMismatch { width: 3, height: 2, cells: 5 });
     }
 
     #[test]
     fn new_rejects_dimensions_that_overflow() {
         let error = Grid::new(usize::MAX, 2, Vec::<u8>::new()).unwrap_err();
-        assert_eq!(
-            error,
-            RasterError::DimensionsTooLarge { width: usize::MAX, height: 2 }
-        );
+        assert_eq!(error, RasterError::DimensionsTooLarge { width: usize::MAX, height: 2 });
     }
 
     #[test]
