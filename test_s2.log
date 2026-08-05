@@ -1,0 +1,47 @@
+warning: variable does not need to be mutable
+   --> tpt-gis-io\src\shapefile.rs:492:13
+    |
+492 |         let mut finished = false;
+    |             ----^^^^^^^^
+    |             |
+    |             help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: `tpt-gis-io` (lib) generated 1 warning (run `cargo fix --lib -p tpt-gis-io` to apply 1 suggestion)
+   Compiling tpt-gis-index v0.1.0 (C:\Programming\2 WIP\tpt-gis\tpt-gis-index)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.52s
+     Running unittests src\lib.rs (target\debug\deps\tpt_gis_index-95a49b0f17e0858f.exe)
+
+running 5 tests
+test s2::tests::origin_maps_to_a_cell_whose_centre_is_the_origin ... ok
+test s2::tests::ij_round_trips_through_face_ij ... FAILED
+test s2::tests::parent_and_children_are_consistent ... FAILED
+test s2::tests::level_and_face_are_well_defined ... ok
+test s2::tests::tokens_round_trip ... ok
+
+failures:
+
+---- s2::tests::ij_round_trips_through_face_ij stdout ----
+
+thread 's2::tests::ij_round_trips_through_face_ij' (102976) panicked at tpt-gis-index\src\s2.rs:335:9:
+assertion `left == right` failed
+  left: S2CellId(10265315640982110208)
+ right: S2CellId(10838999164352724992)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- s2::tests::parent_and_children_are_consistent stdout ----
+
+thread 's2::tests::parent_and_children_are_consistent' (51408) panicked at tpt-gis-index\src\s2.rs:311:9:
+assertion `left == right` failed
+  left: S2CellId(5260292325698961408)
+ right: S2CellId(5210963836030418944)
+
+
+failures:
+    s2::tests::ij_round_trips_through_face_ij
+    s2::tests::parent_and_children_are_consistent
+
+test result: FAILED. 3 passed; 2 failed; 0 ignored; 0 measured; 24 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p tpt-gis-index --lib`

@@ -1,0 +1,43 @@
+   Compiling crc32fast v1.5.0
+   Compiling adler2 v2.0.1
+   Compiling simd-adler32 v0.3.10
+   Compiling weezl v0.1.12
+   Compiling drone-geofence-demo v0.1.0 (C:\Programming\2 WIP\tpt-gis\examples\drone-geofence-demo)
+   Compiling tpt-gis-io v0.1.0 (C:\Programming\2 WIP\tpt-gis\tpt-gis-io)
+   Compiling miniz_oxide v0.8.9
+warning: variable does not need to be mutable
+   --> tpt-gis-io\src\shapefile.rs:492:13
+    |
+492 |         let mut finished = false;
+    |             ----^^^^^^^^
+    |             |
+    |             help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+   Compiling tpt-gis-index v0.1.0 (C:\Programming\2 WIP\tpt-gis\tpt-gis-index)
+warning: `tpt-gis-io` (lib) generated 1 warning (run `cargo fix --lib -p tpt-gis-io` to apply 1 suggestion)
+   Compiling spatial-join-cli v0.1.0 (C:\Programming\2 WIP\tpt-gis\examples\spatial-join-cli)
+   Compiling flate2 v1.1.9
+   Compiling tpt-gis-raster v0.1.0 (C:\Programming\2 WIP\tpt-gis\tpt-gis-raster)
+error[E0583]: file not found for module `cog`
+  --> tpt-gis-raster\src\lib.rs:58:1
+   |
+58 | pub mod cog;
+   | ^^^^^^^^^^^^
+   |
+   = help: to create the module `cog`, create file "tpt-gis-raster\src\cog.rs" or "tpt-gis-raster\src\cog\mod.rs"
+   = note: if there is a `mod cog` elsewhere in the crate already, import it with `use crate::...` instead
+
+error[E0583]: file not found for module `geotiff`
+  --> tpt-gis-raster\src\lib.rs:60:1
+   |
+60 | pub mod geotiff;
+   | ^^^^^^^^^^^^^^^^
+   |
+   = help: to create the module `geotiff`, create file "tpt-gis-raster\src\geotiff.rs" or "tpt-gis-raster\src\geotiff\mod.rs"
+   = note: if there is a `mod geotiff` elsewhere in the crate already, import it with `use crate::...` instead
+
+For more information about this error, try `rustc --explain E0583`.
+error: could not compile `tpt-gis-raster` (lib) due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...

@@ -1,0 +1,46 @@
+   Compiling tpt-gis-raster v0.1.0 (C:\Programming\2 WIP\tpt-gis\tpt-gis-raster)
+warning: methods `as_u64` and `as_f64` are never used
+   --> tpt-gis-raster\src\geotiff.rs:188:8
+    |
+178 | impl Entry {
+    | ---------- methods in this implementation
+...
+188 |     fn as_u64(&self, little: bool) -> Option<u64> {
+    |        ^^^^^^
+...
+197 |     fn as_f64(&self, little: bool) -> Option<f64> {
+    |        ^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: fields `planar_config`, `samples_per_pixel`, and `ifd_offset` are never read
+   --> tpt-gis-raster\src\geotiff.rs:277:5
+    |
+270 | struct ImageInfo {
+    |        --------- fields in this struct
+...
+277 |     planar_config: u16,
+    |     ^^^^^^^^^^^^^
+278 |     samples_per_pixel: u16,
+    |     ^^^^^^^^^^^^^^^^^
+...
+284 |     ifd_offset: u64,
+    |     ^^^^^^^^^^
+    |
+    = note: `ImageInfo` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: unused return value of `core::num::<impl u8>::wrapping_add` that must be used
+    --> tpt-gis-raster\src\geotiff.rs:1070:25
+     |
+1070 |                         data[cur].wrapping_add(data[prev]);
+     |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: this returns the result of the operation, without modifying the original
+     = note: `#[warn(unused_must_use)]` (part of `#[warn(unused)]`) on by default
+help: use `let _ = ...` to ignore the resulting value
+     |
+1070 |                         let _ = data[cur].wrapping_add(data[prev]);
+     |                         +++++++
+
+warning: `tpt-gis-raster` (lib) generated 3 warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.13s

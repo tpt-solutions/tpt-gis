@@ -1,0 +1,122 @@
+ Downloading crates ...
+  Downloaded ipnet v2.12.1
+   Compiling proc-macro2 v1.0.107
+   Compiling quote v1.0.47
+   Compiling unicode-ident v1.0.24
+   Compiling stable_deref_trait v1.2.1
+   Compiling pin-project-lite v0.2.17
+   Compiling bytes v1.12.1
+   Compiling windows-link v0.2.1
+   Compiling shlex v2.0.1
+   Compiling find-msvc-tools v0.1.9
+   Compiling futures-core v0.3.33
+   Compiling itoa v1.0.18
+   Compiling litemap v0.8.2
+   Compiling smallvec v1.15.2
+   Compiling writeable v0.6.3
+   Compiling utf8_iter v1.0.4
+   Compiling icu_properties_data v2.2.0
+   Compiling icu_normalizer_data v2.2.0
+   Compiling percent-encoding v2.3.2
+   Compiling zeroize v1.9.0
+   Compiling once_cell v1.21.4
+   Compiling windows-sys v0.61.2
+   Compiling getrandom v0.2.17
+   Compiling cc v1.4.0
+   Compiling rustls-pki-types v1.15.1
+   Compiling untrusted v0.9.0
+   Compiling http v1.5.0
+   Compiling futures-task v0.3.33
+   Compiling slab v0.4.12
+   Compiling httparse v1.10.1
+   Compiling futures-util v0.3.33
+   Compiling try-lock v0.2.5
+   Compiling tower-service v0.3.3
+   Compiling rustls v0.23.43
+   Compiling libc v0.2.189
+   Compiling serde_core v1.0.229
+   Compiling want v0.3.1
+   Compiling form_urlencoded v1.2.2
+   Compiling tracing-core v0.1.36
+   Compiling http-body v1.1.0
+   Compiling futures-channel v0.3.33
+   Compiling atomic-waker v1.1.2
+   Compiling serde v1.0.229
+   Compiling subtle v2.6.1
+   Compiling sync_wrapper v1.0.2
+   Compiling socket2 v0.6.5
+   Compiling mio v1.2.2
+   Compiling base64 v0.22.1
+   Compiling ring v0.17.14
+   Compiling tower-layer v0.3.3
+   Compiling ipnet v2.12.1
+   Compiling webpki-roots v1.0.9
+   Compiling tracing v0.1.44
+   Compiling ryu v1.0.23
+   Compiling bitflags v2.13.1
+   Compiling http-body-util v0.1.4
+   Compiling log v0.4.33
+   Compiling tokio v1.53.1
+   Compiling syn v2.0.119
+   Compiling syn v3.0.3
+   Compiling synstructure v0.13.2
+   Compiling tower v0.5.3
+   Compiling zerofrom-derive v0.1.7
+   Compiling yoke-derive v0.8.2
+   Compiling zerovec-derive v0.11.3
+   Compiling displaydoc v0.2.7
+   Compiling serde_urlencoded v0.7.1
+   Compiling hyper v1.11.0
+   Compiling zerofrom v0.1.8
+   Compiling yoke v0.8.3
+   Compiling zerovec v0.11.6
+   Compiling zerotrie v0.2.4
+   Compiling hyper-util v0.1.20
+   Compiling tinystr v0.8.3
+   Compiling potential_utf v0.1.5
+   Compiling icu_collections v2.2.0
+   Compiling icu_locale_core v2.2.0
+   Compiling icu_provider v2.2.0
+   Compiling icu_properties v2.2.0
+   Compiling icu_normalizer v2.2.0
+   Compiling rustls-webpki v0.103.13
+   Compiling idna_adapter v1.2.2
+   Compiling idna v1.1.0
+   Compiling url v2.5.8
+   Compiling tower-http v0.6.11
+   Compiling tokio-rustls v0.26.4
+   Compiling hyper-rustls v0.27.9
+   Compiling reqwest v0.12.28
+   Compiling tpt-gis-raster v0.1.0 (C:\Programming\2 WIP\tpt-gis\tpt-gis-raster)
+warning: methods `as_u64` and `as_f64` are never used
+   --> tpt-gis-raster\src\geotiff.rs:188:8
+    |
+178 | impl Entry {
+    | ---------- methods in this implementation
+...
+188 |     fn as_u64(&self, little: bool) -> Option<u64> {
+    |        ^^^^^^
+...
+197 |     fn as_f64(&self, little: bool) -> Option<f64> {
+    |        ^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: fields `planar_config`, `samples_per_pixel`, and `ifd_offset` are never read
+   --> tpt-gis-raster\src\geotiff.rs:277:5
+    |
+270 | struct ImageInfo {
+    |        --------- fields in this struct
+...
+277 |     planar_config: u16,
+    |     ^^^^^^^^^^^^^
+278 |     samples_per_pixel: u16,
+    |     ^^^^^^^^^^^^^^^^^
+...
+284 |     ifd_offset: u64,
+    |     ^^^^^^^^^^
+    |
+    = note: `ImageInfo` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: `tpt-gis-raster` (lib) generated 2 warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 25.59s

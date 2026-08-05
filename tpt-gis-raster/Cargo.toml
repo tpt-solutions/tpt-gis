@@ -11,3 +11,36 @@ homepage.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+libm = { version = "0.2", default-features = false }
+# DEFLATE via the pure-Rust miniz_oxide backend (`rust_backend`); the `zlib*`
+# features would pull in a C library through `-sys` crates, which this project
+# does not allow.
+flate2 = { version = "1.1", default-features = false, features = ["rust_backend"], optional = true }
+# LZW (TIFF variant), pure Rust, MIT/Apache-2.0.
+weezl = { version = "0.1", default-features = false, features = ["alloc"], optional = true }
+# `rustls-tls` rather than `native-tls`: no OpenSSL/SChannel FFI.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"], optional = true }
+
+[features]
+default = ["std"]
+## Enables the (Geo)TIFF/COG readers, which need `std::io` for DEFLATE streams.
+std = ["dep:flate2", "dep:weezl"]
+## Enables the async HTTP Range-request streaming reader ([`http`](crate::http)).
+http = ["std", "dep:reqwest"]
+
+[dev-dependencies]
+# Used only by the HTTP streaming reader's unit test to drive its async path.
+tokio = { version = "1", default-features = false, features = ["rt"] }
+# Benchmark harness for the COG streaming read.
+criterion = { version = "0.5", default-features = false }
+
+[[bench]]
+name = "cog_stream"
+harness = false
+required-features = ["http"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
