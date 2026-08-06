@@ -126,7 +126,7 @@ Source design doc: `spec.txt`.
 - [x] WKB (Well-Known Binary) reader/writer
 - [x] WKT (Well-Known Text) reader/writer
 - [x] Shapefile (.shp/.shx/.dbf) reader
-- [ ] GeoPackage reader/writer
+- [x] GeoPackage reader/writer (pure-Rust, zero-FFI SQLite file format in `tpt-gis-io/src/geopackage/`; leaf+interior read, single-leaf-page write)
 - [x] Streaming / zero-copy design for large files (`ShpGeometryIter` for shapefiles)
 
 ### tpt-gis-index (spatial indexing)

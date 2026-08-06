@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository. Agent sessions (Kilo) should also read [`AGENTS.md`](AGENTS.md) for a compact, command-focused summary.
 
 ## Project overview
 
@@ -12,10 +12,21 @@ for the design rationale). All five crates have real implementations:
 ```
 tpt-gis-core      # CRS definitions, datum transforms, geodesic math — no_std, implemented
 tpt-gis-geom      # OGC Simple Features geometry + topological predicates — no_std, implemented
-tpt-gis-io        # GeoJSON/WKB/WKT/Shapefile readers+writers — implemented, Phase 2
+tpt-gis-io        # GeoJSON/WKB/WKT/Shapefile/GeoPackage readers+writers — implemented, Phase 2
 tpt-gis-index     # R-Trees, Quadtrees, H3/S2 — implemented, Phase 2
 tpt-gis-raster    # Grid data, map algebra, COG/GeoTIFF parsing — implemented, Phase 3
 ```
+
+### Crates NOT in the workspace (`exclude` in root `Cargo.toml`)
+`cargo build --workspace` / `cargo test --workspace` will **not** build these:
+- `examples/wasm-geofence-demo` — a `cdylib` that builds only for
+  `wasm32-unknown-unknown` (needs `wasm-bindgen` + `wasm-bindgen-cli`).
+- `tpt-gis-io/fuzz`, `tpt-gis-raster/fuzz` — cargo-fuzz harnesses; they need
+  `nightly` + `cargo-fuzz` (`cargo fuzz build -O`), not local stable.
+
+### Not yet implemented
+- None of the workspace crates have a public version `1.0` release; see `todo.md` for
+  the current phase status of each crate.
 
 ## Commands
 
