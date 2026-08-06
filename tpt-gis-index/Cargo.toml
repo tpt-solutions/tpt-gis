@@ -8,6 +8,7 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
+readme = "README.md"
 keywords = ["gis", "spatial-index", "rtree", "h3", "geospatial"]
 categories = ["science::geo", "algorithms", "data-structures"]
 
@@ -15,8 +16,8 @@ categories = ["science::geo", "algorithms", "data-structures"]
 workspace = true
 
 [dependencies]
-tpt-gis-geom = { path = "../tpt-gis-geom", features = ["std"] }
-tpt-gis-io = { path = "../tpt-gis-io" }
+tpt-gis-geom = { path = "../tpt-gis-geom", features = ["std"], version = "0.1.0" }
+tpt-gis-io = { path = "../tpt-gis-io", version = "0.1.0" }
 h3o = "0.10"
 
 [dev-dependencies]

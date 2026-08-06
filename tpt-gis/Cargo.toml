@@ -8,6 +8,7 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
+readme = "README.md"
 keywords = ["gis", "geospatial", "geodesy", "geojson", "cog"]
 categories = ["science::geo", "algorithms"]
 
@@ -34,11 +35,11 @@ raster = ["dep:tpt-gis-raster"]
 http = ["raster", "tpt-gis-raster/http"]
 
 [dependencies]
-tpt-gis-core = { path = "../tpt-gis-core", default-features = false, optional = true }
-tpt-gis-geom = { path = "../tpt-gis-geom", default-features = false, optional = true }
-tpt-gis-io = { path = "../tpt-gis-io", optional = true }
-tpt-gis-index = { path = "../tpt-gis-index", optional = true }
-tpt-gis-raster = { path = "../tpt-gis-raster", default-features = false, optional = true }
+tpt-gis-core = { path = "../tpt-gis-core", default-features = false, optional = true, version = "0.1.0" }
+tpt-gis-geom = { path = "../tpt-gis-geom", default-features = false, optional = true, version = "0.1.0" }
+tpt-gis-io = { path = "../tpt-gis-io", optional = true, version = "0.1.0" }
+tpt-gis-index = { path = "../tpt-gis-index", optional = true, version = "0.1.0" }
+tpt-gis-raster = { path = "../tpt-gis-raster", default-features = false, optional = true, version = "0.1.0" }
 
 [package.metadata.docs.rs]
 all-features = true

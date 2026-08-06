@@ -8,6 +8,7 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
+readme = "README.md"
 keywords = ["gis", "geometry", "geospatial", "ogc", "polygon"]
 categories = ["science::geo", "algorithms"]
 
