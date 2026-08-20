@@ -7,6 +7,10 @@ publish = false
 [package.metadata]
 cargo-fuzz = true
 
+# Standalone workspace: kept out of the parent `tpt-gis` workspace so it can be
+# built/checked in isolation by cargo-fuzz (and `cargo check`).
+[workspace]
+
 [dependencies]
 libfuzzer-sys = "0.4"
 tpt-gis-io = { path = ".." }
@@ -32,5 +36,17 @@ doc = false
 [[bin]]
 name = "shapefile"
 path = "fuzz_targets/shapefile.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "geopackage"
+path = "fuzz_targets/geopackage.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "dbf"
+path = "fuzz_targets/dbf.rs"
 test = false
 doc = false

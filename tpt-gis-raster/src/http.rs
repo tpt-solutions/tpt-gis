@@ -36,6 +36,11 @@ use crate::geotiff::{GeoTiff, GeoTiffError, ImageLayout};
 /// layout can be parsed without a second round trip.
 const PREFIX: usize = 1 << 20; // 1 MiB
 
+/// Per-request deadlines for the HTTP transport. A Range-unaware or slow-loris
+/// origin must not be able to hang a streaming reader indefinitely.
+const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// Errors from the HTTP COG reader.
 #[derive(Debug)]
 pub enum CogHttpError {
@@ -89,6 +94,34 @@ struct HttpTransport {
     url: String,
 }
 
+/// Validates an HTTP Range response before its body is buffered.
+///
+/// A COG reader must stream only the requested bytes, so a Range-unaware origin
+/// that answers `200 OK` with the *entire* file would silently defeat that
+/// promise (the reader would download and then truncate the whole file). We
+/// therefore require the `206 Partial Content` status exactly. As defense-in-depth
+/// we also reject a `206` whose declared `Content-Length` is larger than the range
+/// we asked for.
+fn validate_range_response(
+    status: reqwest::StatusCode,
+    content_length: Option<u64>,
+    len: usize,
+) -> Result<(), CogHttpError> {
+    if status != reqwest::StatusCode::PARTIAL_CONTENT {
+        return Err(CogHttpError::Http(format!(
+            "expected 206 Partial Content for range request, got {status}"
+        )));
+    }
+    if let Some(cl) = content_length {
+        if cl > len as u64 {
+            return Err(CogHttpError::Http(format!(
+                "range response body {cl} bytes exceeds requested {len}"
+            )));
+        }
+    }
+    Ok(())
+}
+
 impl RangeTransport for HttpTransport {
     fn fetch_range(&self, start: u64, len: usize) -> RangeFetch {
         let client = self.client.clone();
@@ -107,10 +140,7 @@ impl RangeTransport for HttpTransport {
                 .send()
                 .await
                 .map_err(|e| CogHttpError::Http(e.to_string()))?;
-            let status = response.status();
-            if !status.is_success() {
-                return Err(CogHttpError::Http(format!("unexpected status {status}")));
-            }
+            validate_range_response(response.status(), response.content_length(), len)?;
             let bytes = response.bytes().await.map_err(|e| CogHttpError::Http(e.to_string()))?;
             // A misbehaving server must not make us buffer more bytes than we asked
             // for. Cap the body to the requested length.
@@ -232,7 +262,17 @@ impl CogRangeReader {
     /// Creates a reader that fetches the COG at `url` over HTTP Range requests.
     #[must_use]
     pub fn new(url: impl Into<String>) -> Self {
-        Self::with_transport(HttpTransport { client: reqwest::Client::new(), url: url.into() })
+        let client = reqwest::Client::builder()
+            .timeout(REQUEST_TIMEOUT)
+            .connect_timeout(CONNECT_TIMEOUT)
+            .build()
+            .unwrap_or_else(|e| {
+                // A builder with only timeouts cannot fail to configure; fall back
+                // to a default client rather than panicking on the off chance.
+                let _ = e;
+                reqwest::Client::new()
+            });
+        Self::with_transport(HttpTransport { client, url: url.into() })
     }
 
     /// Creates a reader over an arbitrary [`RangeTransport`] (in-memory buffer,
@@ -359,7 +399,7 @@ fn tile_window(
 mod tests {
     use super::*;
     use crate::geotiff::testsupport::make_cog;
-
+    use reqwest::StatusCode;
     #[test]
     fn streams_only_the_tiles_a_region_needs() {
         // 2048x2048, 256x256 tiles -> 64 tiles, ~4 MiB. The 1 MiB prefix covers the
@@ -399,5 +439,29 @@ mod tests {
             "fetched {total} of {} bytes — that is not a streaming read",
             bytes.len()
         );
+    }
+
+    #[test]
+    fn range_response_must_be_206_not_200() {
+        // A Range-unaware origin that answers `200 OK` with the whole file must be
+        // rejected: silently downloading and truncating the whole file defeats the
+        // module's "read without downloading the whole file" promise.
+        assert!(validate_range_response(StatusCode::OK, Some(9999), 512).is_err());
+        assert!(
+            validate_range_response(StatusCode::from_u16(200).unwrap(), Some(512), 512).is_err()
+        );
+    }
+
+    #[test]
+    fn range_response_206_within_requested_length_is_ok() {
+        assert!(validate_range_response(StatusCode::PARTIAL_CONTENT, Some(512), 512).is_ok());
+        assert!(validate_range_response(StatusCode::PARTIAL_CONTENT, Some(100), 512).is_ok());
+        // Missing Content-Length header is tolerated (defense-in-depth only).
+        assert!(validate_range_response(StatusCode::PARTIAL_CONTENT, None, 512).is_ok());
+    }
+
+    #[test]
+    fn range_response_206_exceeding_requested_length_is_rejected() {
+        assert!(validate_range_response(StatusCode::PARTIAL_CONTENT, Some(513), 512).is_err());
     }
 }

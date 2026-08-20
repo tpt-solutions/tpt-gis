@@ -14,11 +14,7 @@ fn main() {
     println!("point inside bbox: {}", bbox.contains_point(p));
 
     // Line length.
-    let line_pts = [
-        Point::new(0.0, 0.0),
-        Point::new(3.0, 4.0),
-        Point::new(3.0, 0.0),
-    ];
+    let line_pts = [Point::new(0.0, 0.0), Point::new(3.0, 4.0), Point::new(3.0, 0.0)];
     let line = LineString::new(&line_pts);
     println!("line length: {:.1}", line.length());
 
@@ -36,10 +32,7 @@ fn main() {
     ];
     let poly = Polygon::from_exterior(&square);
     println!("origin inside square: {}", poly.contains_point(Point::new(5.0, 5.0)));
-    println!(
-        "outside point inside square: {}",
-        poly.contains_point(Point::new(15.0, 5.0))
-    );
+    println!("outside point inside square: {}", poly.contains_point(Point::new(15.0, 5.0)));
 
     // Topological predicate: do two squares intersect?
     let other = [

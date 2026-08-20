@@ -276,6 +276,15 @@ struct ImageInfo {
 /// would attempt an unbounded allocation).
 const MAX_DECODE_BYTES: usize = 1 << 30; // 1 GiB
 
+/// The maximum number of *raw* (still-compressed) bytes a single strip/tile chunk
+/// is allowed to declare via its `StripByteCounts`/`TileByteCounts` IFD tag. This
+/// is checked in [`GeoTiff::image_info_from`] — which both the synchronous
+/// `decode_window` path and the HTTP `read_region` prefetch loop pass through —
+/// before any `fetch` of the untrusted byte count is issued, closing a path where
+/// a crafted COG could trigger a huge fetch (and, over HTTP, a real Range request)
+/// without first being rejected.
+const MAX_RAW_CHUNK_BYTES: u64 = 1 << 30; // 1 GiB
+
 /// A parsed (Geo)TIFF. All byte access goes through `fetch`, so the same struct
 /// serves an in-memory file and (via a closure backed by HTTP range requests) a
 /// remote COG.
@@ -583,6 +592,16 @@ impl GeoTiff {
         }
         let chunks: Vec<(u64, u64)> = off_vals.into_iter().zip(cnt_vals).collect();
 
+        // Reject any chunk whose declared (uncompressed) byte count is absurd
+        // before a fetch of that count is ever issued. This guards both the local
+        // `decode_window` path and the HTTP `read_region` prefetch loop, which call
+        // `fetch_range` directly with these same untrusted counts.
+        for &(_, count) in &chunks {
+            if count > MAX_RAW_CHUNK_BYTES {
+                return Err(GeoTiffError::SizeMismatch("chunk byte count exceeds raw size limit"));
+            }
+        }
+
         let (geo_transform, epsg) = read_georeferencing(ifd, self.little)?;
         let nodata = ifd
             .get(TAG_GDAL_NODATA)
@@ -593,7 +612,12 @@ impl GeoTiff {
             ifd.get(TAG_SUB_IFDS).map(|e| integer_list(e, self.little)).unwrap_or_default();
 
         let internal_tiling = chunks.windows(2).all(|pair| pair[0].0 < pair[1].0);
-        let last_data_offset = chunks.iter().map(|(o, c)| o + c).max().unwrap_or(0);
+        // Use `checked_add` so a hostile `(offset, byte_count)` pair cannot wrap and
+        // panic; an overflowing chunk has already been rejected by the
+        // `MAX_RAW_CHUNK_BYTES` cap above, but the offset itself is attacker-controlled
+        // and must not produce a bogus `last_data_offset` used by layout validation.
+        let last_data_offset =
+            chunks.iter().map(|(o, c)| o.checked_add(*c).unwrap_or(u64::MAX)).max().unwrap_or(0);
 
         Ok(ImageInfo {
             width,
@@ -1572,5 +1596,32 @@ mod tests {
         let region = region.as_u8().unwrap();
         assert_eq!(region.get(0, 0), Some(2)); // col 1, row 1
         assert_eq!(region.get(1, 1), Some(4)); // col 2, row 2
+    }
+
+    #[test]
+    fn rejects_a_chunk_with_an_absurd_byte_count() {
+        // A crafted COG may declare a per-tile byte count far larger than the real
+        // tile size, reaching a (possibly very large over HTTP) fetch before any
+        // size check. `MAX_RAW_CHUNK_BYTES` must reject it in `image_info_from`
+        // before a fetch is issued.
+        let mut bytes = testsupport::make_cog(4, 4, 2, 2, |c, r| (c + r) as u8);
+        // Locate the TileByteCounts (tag 325) external array via the IFD and inflate
+        // the first chunk's count past the cap.
+        let ifd = u32::from_le_bytes(bytes[4..8].try_into().unwrap()) as usize;
+        let count = u16::from_le_bytes(bytes[ifd..ifd + 2].try_into().unwrap()) as usize;
+        let mut p = ifd + 2;
+        for _ in 0..count {
+            let tag = u16::from_le_bytes(bytes[p..p + 2].try_into().unwrap());
+            if tag == 325 {
+                let value_off =
+                    u32::from_le_bytes(bytes[p + 8..p + 12].try_into().unwrap()) as usize;
+                let huge = MAX_RAW_CHUNK_BYTES as u32 + 1;
+                bytes[value_off..value_off + 4].copy_from_slice(&huge.to_le_bytes());
+                break;
+            }
+            p += 12;
+        }
+        let tiff = GeoTiff::parse(&bytes).unwrap();
+        assert!(tiff.read_image(0).is_err());
     }
 }

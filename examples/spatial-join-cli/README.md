@@ -4,7 +4,10 @@
 built on the `tpt-gis-index` R-Tree and the `tpt-gis-core` / `tpt-gis-geom` /
 `tpt-gis-io` crates.
 
-This is a demo binary (`publish = false`) — it is not published to crates.io.
+This example is a thin wrapper around the published CLI crate
+[`tpt-gis-cli`](https://crates.io/crates/tpt-gis-cli) (binary name `tptgis`), and also
+hosts the spatial-join criterion benchmark (kept here so the published crate stays lean).
+Install the real CLI with `cargo install tpt-gis-cli`.
 
 ## Subcommands
 

@@ -29,16 +29,16 @@ fn main() {
     let utm = utm::forward(&Ellipsoid::WGS84, melbourne, zone);
     println!(
         "UTM zone {}N: easting={:.1} m, northing={:.1} m (EPSG {})",
-        zone.number, utm.x, utm.y, zone.epsg_code()
+        zone.number,
+        utm.x,
+        utm.y,
+        zone.epsg_code()
     );
 
     // Local tangent plane: meters from an origin (accounts for longitude shrink).
     let plane = LocalTangentPlane::new(melbourne);
     let local = plane.to_local(sydney);
-    println!(
-        "Sydney is {:.0} m east, {:.0} m north of Melbourne (local ENU)",
-        local.x, local.y
-    );
+    println!("Sydney is {:.0} m east, {:.0} m north of Melbourne (local ENU)", local.x, local.y);
 
     // Geodetic <-> ECEF round trip.
     let gc: Geocentric = geodetic_to_geocentric(&Ellipsoid::WGS84, melbourne, 0.0);

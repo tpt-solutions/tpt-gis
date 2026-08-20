@@ -27,6 +27,8 @@
 //! - `http` — async HTTP Range-request streaming reader for remote COGs
 //! - `std` — host `std` math intrinsics for `core`/`geom` (on by default)
 
+pub mod prelude;
+
 #[cfg(feature = "core")]
 pub use tpt_gis_core as core;
 

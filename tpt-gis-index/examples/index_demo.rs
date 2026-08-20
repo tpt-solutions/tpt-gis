@@ -50,8 +50,7 @@ fn main() {
         payload: 100usize,
     }];
     let results = spatial_join(&points, &polygons, SpatialJoinConfig::default());
-    let (pp, gp) = results
-        .first()
-        .map_or((0usize, 0usize), |r| (r.point_payload, r.polygon_payload));
+    let (pp, gp) =
+        results.first().map_or((0usize, 0usize), |r| (r.point_payload, r.polygon_payload));
     println!("spatial join matches: {} (point {}, polygon {})", results.len(), pp, gp);
 }

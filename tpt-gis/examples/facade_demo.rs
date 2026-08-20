@@ -2,7 +2,7 @@
 //!
 //! Run with: `cargo run --example facade_demo -p tpt-gis`
 
-use tpt_gis::core::{Ellipsoid, GeoPoint, geodesic};
+use tpt_gis::core::{geodesic, Ellipsoid, GeoPoint};
 use tpt_gis::geom::Point;
 
 fn main() {

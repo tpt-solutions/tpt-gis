@@ -329,17 +329,17 @@ the workspace — the items below are new hardening/ergonomics work, not unfinis
 features from an earlier pass.
 
 ### COG HTTP / raster hardening (security)
-- [ ] `HttpTransport::fetch_range` (`tpt-gis-raster/src/http.rs`) accepts any 2xx
+- [x] `HttpTransport::fetch_range` (`tpt-gis-raster/src/http.rs`) accepts any 2xx
       status, not just `206 Partial Content` — a Range-unaware origin returning
       `200 OK` with the full body makes the reader silently buffer the entire file
       before truncating, defeating the module's own "read without downloading the
       whole file" promise. Extract a pure `validate_range_response` helper that
       hard-errors on `200`/anything but `206`, plus a defense-in-depth check that
       a `206`'s `Content-Length` doesn't exceed the requested range.
-- [ ] `CogRangeReader::new` builds `reqwest::Client::new()` with no timeout — a
+- [x] `CogRangeReader::new` builds `reqwest::Client::new()` with no timeout — a
       hung/slow-loris origin blocks forever. Add `.timeout(30s)`/`.connect_timeout(10s)`
       via `Client::builder()`.
-- [ ] `decode_window` (`tpt-gis-raster/src/geotiff.rs`) calls `self.fetch(offset,
+- [x] `decode_window` (`tpt-gis-raster/src/geotiff.rs`) calls `self.fetch(offset,
       byte_count)` with `byte_count` taken directly from the untrusted
       `StripByteCounts`/`TileByteCounts` IFD tags, before any size check (only the
       *decompressed* size is capped, via `MAX_DECODE_BYTES`). A crafted COG can
@@ -348,7 +348,7 @@ features from an earlier pass.
       `image_info_from` right after `chunks` is built (closes both the local
       `decode_window` path and the HTTP `read_region` prefetch-loop path, which
       calls `transport.fetch_range` directly with the same untrusted count).
-- [ ] No fuzz target covers the hand-rolled GeoPackage/SQLite b-tree reader
+- [x] No fuzz target covers the hand-rolled GeoPackage/SQLite b-tree reader
       (`tpt-gis-io/src/geopackage/`) or the Shapefile DBF reader (`read_dbf`) — add
       `tpt-gis-io/fuzz/fuzz_targets/{geopackage,dbf}.rs`.
 - [ ] (deferred, lower severity, noted but not blocking) `decode_lzw` decodes the
@@ -357,12 +357,14 @@ features from an earlier pass.
       allocation before the existing post-decode check fires; and
       `last_data_offset`'s `offset + count` sum is unchecked (partially mitigated
       by the `MAX_RAW_CHUNK_BYTES` cap above, but `offset` itself is still
-      attacker-controlled).
+      attacker-controlled). The `offset + count` overflow was closed in
+      `image_info_from` via `checked_add` (saturating to `u64::MAX`), so it can no
+      longer panic; the `decode_lzw` full-stream-before-check ordering remains.
 
 ### Adoption ergonomics
-- [ ] Root `README.md` quickstart code block + CI/license/MSRV badges
-- [ ] `prelude` module on the `tpt-gis` facade crate for one-line ergonomic imports
-- [ ] Promote `examples/spatial-join-cli` to a real installable `tpt-gis-cli` crate
+- [x] Root `README.md` quickstart code block + CI/license/MSRV badges
+- [x] `prelude` module on the `tpt-gis` facade crate for one-line ergonomic imports
+- [x] Promote `examples/spatial-join-cli` to a real installable `tpt-gis-cli` crate
       (`cargo install tpt-gis-cli`, binary name `tptgis`), leaving its criterion
       benchmark behind so the publishable crate stays lean; update `PUBLISHING.md`'s
       publish order and root `Cargo.toml` members accordingly

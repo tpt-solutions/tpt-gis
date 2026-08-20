@@ -1,5 +1,9 @@
 # tpt-gis
 
+[![CI](https://github.com/tpt-solutions/tpt-gis/actions/workflows/ci.yml/badge.svg)](https://github.com/tpt-solutions/tpt-gis/actions/workflows/ci.yml)
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE-MIT)
+[![MSRV](https://img.shields.io/badge/MSRV-1.81-blue)](https://www.rust-lang.org)
+
 A pure Rust, planetary-scale Geographic Information Systems engine — a zero-FFI
 replacement for the GDAL/PROJ/GEOS stack, with `no_std` support for edge/embedded
 targets and cloud-native streaming for planetary-scale raster/vector data.
@@ -35,6 +39,44 @@ tpt-gis/
 See [`spec.txt`](spec.txt) for the full design document, [`todo.md`](todo.md) for
 the phased task breakdown, and [`docs/`](docs/) for usage guides.
 
+## Quickstart
+
+Add the facade crate to your `Cargo.toml`:
+
+```toml
+[dependencies]
+tpt-gis = "0.1"
+```
+
+Then use any of the engine crates behind feature flags. Most users only need the
+`core` (geodesy) and `geom` (vector topology) features:
+
+```rust
+use tpt_gis::core::{geodesic, Ellipsoid, GeoPoint};
+use tpt_gis::geom::{Point, Polygon};
+
+// Geodesic distance between two places on the WGS84 ellipsoid (Vincenty).
+let london = GeoPoint::new(51.5074, -0.1278);
+let paris = GeoPoint::new(48.8566, 2.3522);
+let km = geodesic::inverse(&Ellipsoid::WGS84, london, paris).unwrap().distance_m / 1000.0;
+assert!((km - 343.6).abs() < 1.0); // ≈ 343.6 km
+
+// Point-in-polygon test (zero-allocation, borrowed rings).
+let ring = [
+    Point::new(0.0, 0.0),
+    Point::new(0.0, 1.0),
+    Point::new(1.0, 1.0),
+    Point::new(1.0, 0.0),
+    Point::new(0.0, 0.0),
+];
+let zone = Polygon::from_exterior(&ring);
+assert!(zone.contains_point(Point::new(0.5, 0.5)));
+```
+
+For cloud-native raster, enable `raster` and `http` to stream a remote Cloud
+Optimized GeoTIFF without downloading the whole file (see
+[`tpt-gis-raster`](tpt-gis-raster)).
+
 ## Building
 
 ```sh
@@ -62,7 +104,8 @@ for host-native math intrinsics) and are verified to cross-compile for embedded
 
 The workspace splits the engine into five crates plus a convenience facade crate
 [`tpt-gis`](tpt-gis) that re-exports them behind feature flags — most users should
-depend on `tpt-gis` rather than the individual crates.
+depend on `tpt-gis` rather than the individual crates. The facade also exposes a
+[`prelude`](tpt-gis/src/prelude.rs) module for one-line imports of the common types.
 
 ## Contributing
 

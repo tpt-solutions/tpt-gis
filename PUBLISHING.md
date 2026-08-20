@@ -10,6 +10,8 @@ All crates are prefixed `tpt-gis-` to avoid namespace collisions:
 - `tpt-gis-raster`
 - `tpt-gis-io`
 - `tpt-gis-index`
+- `tpt-gis-cli` (the published CLI; binary name `tptgis`, install via
+  `cargo install tpt-gis-cli`)
 - `tpt-gis` (facade crate — publish **last**)
 
 Reserve these names on crates.io before the first publish. If any are taken, fall
@@ -22,7 +24,7 @@ For each crate:
  1. **README**: Include a short description, install instructions, and a minimal example.
  2. **license / repository / homepage**: Set in `Cargo.toml` (already done via workspace).
  3. **keywords / categories**: Set in `Cargo.toml` for crates.io discoverability (added to
-    all five library crates).
+    all five library crates and to `tpt-gis-cli`).
  4. **documentation**: Run `cargo doc --no-deps` and verify no warnings.
  5. **tests**: Run `cargo test --workspace` and confirm all pass.
  6. **clippy**: Run `cargo clippy --all-targets -- -D warnings`.
@@ -38,7 +40,10 @@ Publish in dependency order:
 3. `tpt-gis-io`
 4. `tpt-gis-index`
 5. `tpt-gis-raster` (Phase 3)
-6. `tpt-gis` (facade) — published last, after all engine crates are on crates.io
+6. `tpt-gis-cli` (the CLI; depends on the engine crates above)
+7. `tpt-gis` (facade) — published last, after all engine crates are on crates.io
 
 Example crates and benches (`drone-geofence-demo`, `spatial-join-cli`) should NOT
-be published (`publish = false` in their `Cargo.toml`).
+be published (`publish = false` in their `Cargo.toml`). `spatial-join-cli` now
+hosts only the spatial-join criterion benchmark; the installable CLI lives in
+`tpt-gis-cli` (binary `tptgis`).

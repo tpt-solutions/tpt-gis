@@ -9,6 +9,7 @@ members = [
     "tpt-gis",
     "examples/drone-geofence-demo",
     "examples/spatial-join-cli",
+    "tpt-gis-cli",
 ]
 # Standalone packages that build for a special target / toolchain and must not be
 # part of `cargo build --workspace` (or the host build would fail):
