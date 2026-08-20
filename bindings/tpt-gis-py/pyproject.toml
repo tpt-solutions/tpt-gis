@@ -1,0 +1,26 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "tpt-gis-py"
+version = "0.1.0"
+description = "Python bindings for tpt-gis: geometry parsing (WKT/WKB/GeoJSON), shapefile reading, and geodesic distance."
+requires-python = ">=3.8"
+license = { text = "MIT OR Apache-2.0" }
+authors = [{ name = "TPT Solutions" }]
+readme = "README.md"
+keywords = ["gis", "geojson", "wkb", "wkt", "shapefile", "geodesy", "geo"]
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Topic :: Scientific/Engineering :: GIS",
+]
+
+[project.urls]
+Repository = "https://github.com/tpt-solutions/tpt-gis"
+Homepage = "https://github.com/tpt-solutions/tpt-gis"
+
+[tool.maturin]
+module-name = "tpt_gis_py"
+features = ["pyo3/extension-module"]

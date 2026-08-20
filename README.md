@@ -3,6 +3,7 @@
 [![CI](https://github.com/tpt-solutions/tpt-gis/actions/workflows/ci.yml/badge.svg)](https://github.com/tpt-solutions/tpt-gis/actions/workflows/ci.yml)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE-MIT)
 [![MSRV](https://img.shields.io/badge/MSRV-1.81-blue)](https://www.rust-lang.org)
+[![PyPI](https://img.shields.io/pypi/v/tpt-gis-py.svg)](https://pypi.org/project/tpt-gis-py/)
 
 A pure Rust, planetary-scale Geographic Information Systems engine — a zero-FFI
 replacement for the GDAL/PROJ/GEOS stack, with `no_std` support for edge/embedded
@@ -76,6 +77,43 @@ assert!(zone.contains_point(Point::new(0.5, 0.5)));
 For cloud-native raster, enable `raster` and `http` to stream a remote Cloud
 Optimized GeoTIFF without downloading the whole file (see
 [`tpt-gis-raster`](tpt-gis-raster)).
+
+## Python bindings
+
+`tpt-gis` ships first-class Python bindings — [`tpt-gis-py`](bindings/tpt-gis-py),
+built with [pyo3](https://pyo3.rs) + [maturin](https://github.com/PyO3/maturin) — so
+you can use the geometry, format, and geodesy engines from Python without leaving the
+Rust safety model.
+
+Install from PyPI (wheels for Linux/macOS/Windows, Python 3.8+):
+
+```sh
+pip install tpt-gis-py
+```
+
+Or build from source:
+
+```sh
+cd bindings/tpt-gis-py
+pip install maturin
+maturin develop
+```
+
+```python
+import tpt_gis_py as gis
+
+poly = gis.Geometry.from_wkt("POLYGON ((0 0, 10 0, 10 10, 0 10, 0 0))")
+assert poly.contains_point(5.0, 5.0)
+
+london = gis.GeoPoint(51.5074, -0.1278)
+paris = gis.GeoPoint(48.8566, 2.3522)
+gis.geodesic_distance(london, paris)  # ≈ 343_500 m on WGS84
+```
+
+See [Python bindings](docs/python-bindings.md) for the full API (WKT/WKB/GeoJSON
+round-trip, shapefile reading, geodesic inverse/direct) and the current v0.1 scope
+(raster/COG, the index crate, GeoPackage, projections, and numpy interop are
+deferred).
 
 ## Building
 

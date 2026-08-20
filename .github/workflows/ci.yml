@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: [master]
+    tags: ["v*"]
   pull_request:
 
 env:
@@ -67,6 +68,56 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: EmbarkStudios/cargo-deny-action@v2
+
+  python-bindings:
+    name: Python bindings (pyo3 + maturin, ${{ matrix.os }})
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install maturin pytest
+      - name: Build & install the extension into a venv
+        working-directory: bindings/tpt-gis-py
+        run: maturin develop
+      - name: Run the pytest suite
+        working-directory: bindings/tpt-gis-py
+        run: pytest -v
+
+
+  publish-python:
+    name: Build & publish Python wheels (PyPI)
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: python-bindings
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Build wheels with maturin
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: bindings/tpt-gis-py
+          command: build
+          args: --release --out dist
+          manylinux: auto
+      - name: Publish wheels to PyPI
+        working-directory: bindings/tpt-gis-py
+        env:
+          MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+        run: |
+          python -m pip install maturin
+          maturin upload --skip-existing dist/*
 
   fuzz:
     name: cargo-fuzz (compile fuzz targets)

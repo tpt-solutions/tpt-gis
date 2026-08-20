@@ -21,3 +21,10 @@ Thumbs.db
 
 # wasm-bindgen / wasm-pack output
 **/pkg/
+
+# Python bindings (pyo3 + maturin) build/venv artifacts
+**/.pytest_cache/
+**/.venv/
+**/__pycache__/
+**/*.pyc
+# Keep the bindings crate's Cargo.lock (application-style, reproducible wheels).

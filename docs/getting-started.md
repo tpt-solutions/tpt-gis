@@ -94,3 +94,10 @@ cargo run -p spatial-join-cli -- generate-fixtures \
   --polygons 500 \
   --output ./fixtures
 ```
+
+## Python Bindings
+
+Prefer Python? `tpt-gis` ships a pyo3 + maturin extension, `tpt-gis-py`, with the
+same geometry, format, and geodesy engines. Install with `pip install tpt-gis-py`
+and see [Python bindings](python-bindings.md) for the full API (WKT/WKB/GeoJSON
+round-trip, shapefile reading, geodesic inverse/direct).

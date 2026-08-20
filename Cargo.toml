@@ -19,6 +19,7 @@ exclude = [
     "examples/wasm-geofence-demo",
     "tpt-gis-io/fuzz",
     "tpt-gis-raster/fuzz",
+    "bindings/tpt-gis-py",
 ]
 
 [workspace.package]

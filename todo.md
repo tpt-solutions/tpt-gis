@@ -368,12 +368,18 @@ features from an earlier pass.
       (`cargo install tpt-gis-cli`, binary name `tptgis`), leaving its criterion
       benchmark behind so the publishable crate stays lean; update `PUBLISHING.md`'s
       publish order and root `Cargo.toml` members accordingly
-- [ ] Python bindings (`bindings/tpt-gis-py`, pyo3 + maturin) — v0.1 scope:
+- [x] Python bindings (`bindings/tpt-gis-py`, pyo3 + maturin) — v0.1 scope:
       `Geometry` (WKT/WKB/GeoJSON round-trip + `contains_point`), shapefile read,
       `GeoPoint`/geodesic distance from `tpt-gis-core`. Deferred: raster/COG, the
-      index crate, GeoPackage, projections, numpy interop. Needs a new CI job
-      (matrixed 3-OS, `maturin develop` + `pytest`) and a workspace `exclude` entry
-      (builds via maturin, not plain `cargo build`, same as the wasm demo)
+       index crate, GeoPackage, projections, numpy interop. A matrixed 3-OS CI job
+       (`maturin develop` + `pytest`) and a workspace `exclude` entry (builds via
+       maturin, not plain `cargo build`, same as the wasm demo) are both in place, and
+       the extension builds + all 10 pytest cases pass locally. Discoverability is
+       wired up: the root README links the bindings (PyPI badge + quickstart), a
+       `docs/python-bindings.md` guide is linked from `docs/getting-started.md`, and a
+       `publish-python` CI job builds abi3 wheels (Python 3.8+, Linux/macOS/Windows)
+       and publishes them to PyPI on `v*` tags via the `PYPI_API_TOKEN` secret. The
+       crate is built as an abi3 extension.
 
 ### Housekeeping (flagged, not actioned)
 - [ ] Six untracked `CHANGELOG.md` files (one per crate) plus

@@ -1,0 +1,24 @@
+[package]
+name = "tpt-gis-py"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.81"
+license = "MIT OR Apache-2.0"
+authors = ["TPT Solutions"]
+repository = "https://github.com/tpt-solutions/tpt-gis"
+homepage = "https://github.com/tpt-solutions/tpt-gis"
+description = "Python bindings for tpt-gis: geometry parsing (WKT/WKB/GeoJSON), shapefile reading, and geodesic distance."
+readme = "README.md"
+keywords = ["gis", "geojson", "wkb", "wkt", "shapefile", "geodesy", "geo"]
+categories = ["science::geo", "api-bindings"]
+publish = false
+
+[lib]
+name = "tpt_gis_py"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.23", features = ["extension-module", "abi3-py38"] }
+tpt-gis-io = { path = "../../tpt-gis-io", version = "0.1.0" }
+tpt-gis-core = { path = "../../tpt-gis-core", version = "0.1.0", features = ["std"] }
+tpt-gis-geom = { path = "../../tpt-gis-geom", version = "0.1.0", features = ["std"] }
