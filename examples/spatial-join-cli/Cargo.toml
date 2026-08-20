@@ -19,7 +19,6 @@ tpt-gis-cli = { path = "../../tpt-gis-cli" }
 
 [dev-dependencies]
 criterion = { version = "0.5", default-features = false }
-rand = { version = "0.8", default-features = false, features = ["std_rng"] }
 tpt-gis-geom = { path = "../../tpt-gis-geom" }
 tpt-gis-index = { path = "../../tpt-gis-index" }
 tpt-gis-io = { path = "../../tpt-gis-io" }

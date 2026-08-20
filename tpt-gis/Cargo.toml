@@ -41,6 +41,9 @@ tpt-gis-io = { path = "../tpt-gis-io", optional = true, version = "0.1.0" }
 tpt-gis-index = { path = "../tpt-gis-index", optional = true, version = "0.1.0" }
 tpt-gis-raster = { path = "../tpt-gis-raster", default-features = false, optional = true, version = "0.1.0" }
 
+[dev-dependencies]
+serde_json = "1"
+
 [package.metadata.docs.rs]
 all-features = true
 rustdoc-args = ["--cfg", "docsrs"]

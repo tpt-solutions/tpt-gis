@@ -10,8 +10,6 @@
 //!   polygons) for benchmarking and development.
 
 use clap::{Parser, Subcommand};
-use rand::rngs::StdRng;
-use rand::{Rng, SeedableRng};
 use serde_json::Map;
 use serde_json::Value;
 use tpt_gis_core::projection::{utm::Zone, web_mercator};
@@ -23,6 +21,10 @@ use tpt_gis_io::geojson::{
     parse_feature_collection, write_feature_collection, Feature, FeatureCollection,
 };
 use tpt_gis_io::geometry::{Geometry, Point, Polygon};
+
+mod csv;
+pub mod rng;
+use crate::rng::SmallRng;
 
 type Payload = Map<String, Value>;
 type SpatialJoinResult = JoinResult<Payload, Payload>;
@@ -99,8 +101,22 @@ enum Commands {
 /// # Errors
 /// Returns an error string if argument parsing or any subcommand fails.
 pub fn cli_main() -> Result<(), String> {
-    let cli = Cli::parse();
+    run_with_args(std::env::args_os())
+}
 
+/// Runs the CLI from an explicit set of arguments (rather than `std::env::args`),
+/// so it can be driven programmatically — from integration tests, the `examples/`
+/// directory, or any embedding host. The first item is treated as the program
+/// name, exactly as `std::env::args` supplies it.
+///
+/// # Errors
+/// Returns an error string if argument parsing or any subcommand fails.
+pub fn run_with_args<I, T>(args: I) -> Result<(), String>
+where
+    I: IntoIterator<Item = T>,
+    T: Into<std::ffi::OsString> + Clone,
+{
+    let cli = Cli::parse_from(args);
     match cli.command {
         Commands::SpatialJoin { points, polygons, output, format, incremental } => {
             run_spatial_join(points, polygons, output, format, incremental)
@@ -177,15 +193,15 @@ fn run_generate_fixtures(
     seed: u64,
     output_dir: String,
 ) -> Result<(), String> {
-    let mut rng = StdRng::seed_from_u64(seed);
+    let mut rng = SmallRng::seed_from_u64(seed);
     std::fs::create_dir_all(&output_dir)
         .map_err(|e| format!("failed to create output directory: {e}"))?;
 
     let points: Vec<Feature> = (0..num_points)
         .map(|i| Feature {
             geometry: Some(Geometry::Point(Point::new(
-                rng.gen_range(-1000.0..1000.0),
-                rng.gen_range(-1000.0..1000.0),
+                rng.gen_range(-1000.0, 1000.0),
+                rng.gen_range(-1000.0, 1000.0),
             ))),
             properties: Map::from_iter([("id".to_string(), Value::Number(i.into()))]),
         })
@@ -193,9 +209,9 @@ fn run_generate_fixtures(
 
     let polygons: Vec<Feature> = (0..num_polygons)
         .map(|i| {
-            let cx = rng.gen_range(-900.0..900.0);
-            let cy = rng.gen_range(-900.0..900.0);
-            let size = rng.gen_range(10.0..100.0);
+            let cx = rng.gen_range(-900.0, 900.0);
+            let cy = rng.gen_range(-900.0, 900.0);
+            let size = rng.gen_range(10.0, 100.0);
             let ring = vec![
                 Point::new(cx - size, cy - size),
                 Point::new(cx + size, cy - size),
@@ -343,13 +359,14 @@ fn write_geojson(results: &[SpatialJoinResult]) -> String {
 fn write_csv(results: &[SpatialJoinResult]) -> Result<String, String> {
     let mut wtr = csv::Writer::from_writer(vec![]);
     for r in results {
-        let mut row = csv::StringRecord::new();
-        row.push_field(&r.point.x.to_string());
-        row.push_field(&r.point.y.to_string());
+        let mut fields: Vec<String> = Vec::new();
+        fields.push(r.point.x.to_string());
+        fields.push(r.point.y.to_string());
         for (_k, v) in &r.point_payload {
-            row.push_field(&v.to_string());
+            fields.push(v.to_string());
         }
-        wtr.write_record(&row).map_err(|e| format!("failed to write csv record: {e}"))?;
+        let strs: Vec<&str> = fields.iter().map(String::as_str).collect();
+        wtr.write_record(strs).map_err(|e| format!("failed to write csv record: {e}"))?;
     }
     let bytes = wtr.into_inner().map_err(|e| format!("failed to finalize csv output: {e}"))?;
     String::from_utf8(bytes).map_err(|e| format!("csv output is not valid utf8: {e}"))

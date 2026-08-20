@@ -29,5 +29,4 @@ all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
 [dev-dependencies]
-approx = "0.5"
 proptest = "1.0"
