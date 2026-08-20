@@ -28,7 +28,8 @@ tpt-gis/
 ├── tpt-gis-geom      # Vector geometry (points, lines, polygons), topological ops (no_std)
 ├── tpt-gis-raster    # Grid data, map algebra, Cloud Optimized GeoTIFF (COG) parsing
 ├── tpt-gis-io        # Parsers/writers for GeoJSON, WKB/WKT, Shapefile, GeoPackage
-└── tpt-gis-index     # R-Trees, Quadtrees, H3/S2 hexagonal grid integration
+├── tpt-gis-index     # R-Trees, Quadtrees, H3/S2 hexagonal grid integration
+└── tpt-gis           # Facade crate re-exporting the five crates behind feature flags
 ```
 
 See [`spec.txt`](spec.txt) for the full design document, [`todo.md`](todo.md) for
@@ -43,7 +44,8 @@ cargo test --workspace
 
 `tpt-gis-core` and `tpt-gis-geom` are `no_std` by default (enable the `std` feature
 for host-native math intrinsics) and are verified to cross-compile for embedded
-(`thumbv7em-none-eabihf`) and WebAssembly (`wasm32-unknown-unknown`) targets.
+(`thumbv7em-none-eabihf`, `riscv32imc-unknown-none-elf` = ESP32-C3) and WebAssembly
+(`wasm32-unknown-unknown`, `wasm32-wasip1`) targets.
 
 ## Examples
 
@@ -64,8 +66,10 @@ depend on `tpt-gis` rather than the individual crates.
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). This project strictly enforces permissive
-(MIT/Apache-2.0-compatible) licensing on all dependencies — no GPL/LGPL.
+This project is currently **issues-only** — bug reports and design discussion via
+GitHub Issues are welcome, but code pull requests are not accepted at this time.
+See [CONTRIBUTING.md](CONTRIBUTING.md). Contributions must use permissive
+(MIT/Apache-2.0-compatible) licensed dependencies — no GPL/LGPL.
 
 ## License
 

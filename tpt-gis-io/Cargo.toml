@@ -9,7 +9,7 @@ authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
 readme = "README.md"
-keywords = ["gis", "geojson", "wkb", "shapefile", "geospatial"]
+keywords = ["gis", "geojson", "wkb", "shapefile", "geospatial", "wkt", "geopackage"]
 categories = ["science::geo", "parser-implementations"]
 
 [lints]

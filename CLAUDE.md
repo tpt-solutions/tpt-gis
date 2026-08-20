@@ -46,6 +46,7 @@ also be checked against the embedded and wasm targets declared in
 
 ```sh
 cargo build -p tpt-gis-core -p tpt-gis-geom --target thumbv7em-none-eabihf
+cargo build -p tpt-gis-core -p tpt-gis-geom --target riscv32imc-unknown-none-elf
 cargo build -p tpt-gis-core -p tpt-gis-geom --target wasm32-unknown-unknown
 ```
 
@@ -74,7 +75,7 @@ than own it, so they can be built over `const`/`static` data with zero heap allo
 **Workspace-level lints (`Cargo.toml` `[workspace.lints]`), inherited via `[lints]
 workspace = true` in every crate:** `unsafe_code = "deny"` and `clippy::all` as a
 warning. Avoid `unsafe`; if it's ever truly unavoidable, it needs a `// SAFETY:`
-comment and explicit discussion in the PR (see `CONTRIBUTING.md`).
+comment and explicit discussion in an issue (see `CONTRIBUTING.md`).
 
 **Module structure within `tpt-gis-core`:** `Crs` (`crs.rs`) is a small closed enum
 (`Wgs84`, `WebMercator`, `Utm(Zone)`) rather than a general EPSG-code-driven system —

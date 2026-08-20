@@ -1,9 +1,13 @@
 # Contributing to tpt-gis
 
-Thanks for your interest in contributing. This project is in its early phases
-(see [`todo.md`](todo.md)) — the fastest way to help is usually to pick up an
-unchecked item there, or open an issue to discuss a larger change before writing
-code.
+This project is currently **issues-only**: bug reports, feature requests, and
+design/architecture discussion via GitHub Issues are welcome, but code pull
+requests are not being accepted at this time.
+
+Thanks for your interest. The project is still in active early-phase development
+(see [`todo.md`](todo.md)) — the most useful contribution right now is usually
+an issue that reports a bug or proposes a change, ideally with a reference or
+repro case, rather than an unsolicited patch.
 
 ## License
 
@@ -15,7 +19,7 @@ the note at the bottom of the [README](README.md#license)).
 compatible with permissive (MIT/Apache-2.0-style) licensing — this is a hard
 requirement, not a preference, since it's core to the project's value
 proposition for commercial and government adopters. CI runs `cargo-deny` to
-enforce this; a dependency that fails the license check will not be merged
+enforce this; a dependency that fails the license check will not be accepted
 until it's replaced or the license is confirmed compatible.
 
 ## Development setup
@@ -32,14 +36,16 @@ crate, also check it still cross-compiles without `std`:
 
 ```sh
 cargo build -p tpt-gis-core -p tpt-gis-geom --target thumbv7em-none-eabihf
+cargo build -p tpt-gis-core -p tpt-gis-geom --target riscv32imc-unknown-none-elf
 cargo build -p tpt-gis-core -p tpt-gis-geom --target wasm32-unknown-unknown
+cargo build -p tpt-gis-core -p tpt-gis-geom --target wasm32-wasip1
 ```
 
 ## Code style
 
 - No `unsafe` (denied at the workspace level) unless there is no safe alternative
   and it comes with a `// SAFETY:` comment justifying it, plus explicit discussion
-  in the PR.
+  in an issue.
 - Public items need doc comments (`missing_docs` is a warning, trending toward
   deny as coverage improves).
 - Prefer borrowed data (`&[Point]`) over owned/heap types in `tpt-gis-core` and
@@ -51,10 +57,11 @@ cargo build -p tpt-gis-core -p tpt-gis-geom --target wasm32-unknown-unknown
 
 ## Pull requests
 
-- Keep PRs focused; large architectural changes should start as an issue/discussion.
-- Include tests for new behavior and update `todo.md` checkboxes for whatever the
-  PR completes.
-- CI (build, test, fmt, clippy, license check) must pass before merge.
+Code pull requests are not accepted at this time (see the note at the top of this
+file). If you have a fix or feature you'd like to see, please open an issue
+describing it first so it can be discussed and tracked. Large architectural
+changes in particular should start as an issue/discussion before any code is
+written.
 
 ## Code of Conduct
 

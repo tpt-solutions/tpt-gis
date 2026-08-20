@@ -8,7 +8,8 @@ Compact, command-focused guidance for agents in this repo. Full conventions live
   `std` is an opt-in feature flag), `tpt-gis-io`, `tpt-gis-index`, `tpt-gis-raster`.
 - `tpt-gis` — facade re-exporting the five crates behind feature flags. Default =
   all features, including `http` (which pulls in reqwest/tokio).
-- Two example binaries: `examples/drone-geofence-demo`, `examples/spatial-join-cli`.
+- Three example binaries: `examples/drone-geofence-demo`, `examples/spatial-join-cli`,
+  and `examples/wasm-geofence-demo` (the latter is excluded from the workspace — see below).
 - Excluded from the workspace (`exclude` in root `Cargo.toml`) — `cargo build
   --workspace` / `cargo test --workspace` will NOT build these:
   - `examples/wasm-geofence-demo` — `cdylib`, builds only for
@@ -32,7 +33,7 @@ Compact, command-focused guidance for agents in this repo. Full conventions live
   never `std` `f64` methods, and must stay `no_std` cross-compilable. Re-check any
   change to them against the embedded/wasm targets above.
 - Workspace lints (`[workspace.lints]`): `unsafe_code = "deny"` (avoid unsafe; needs a
-  `// SAFETY:` comment + PR discussion), `missing_docs = "warn"`, and
+  `// SAFETY:` comment + discussion), `missing_docs = "warn"`, and
   `clippy::all = "warn"`. Only `clippy::all` is enforced — NOT `clippy::pedantic`.
 - `clippy --all-targets -- -D warnings` covers tests/benches. Keep dead code,
   redundant `as` casts, manual `div_ceil`, and single-arm `match` out, or CI fails.

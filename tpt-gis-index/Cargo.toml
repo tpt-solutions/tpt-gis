@@ -9,7 +9,7 @@ authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
 readme = "README.md"
-keywords = ["gis", "spatial-index", "rtree", "h3", "geospatial"]
+keywords = ["gis", "spatial-index", "rtree", "h3", "geospatial", "quadtree", "s2"]
 categories = ["science::geo", "algorithms", "data-structures"]
 
 [lints]

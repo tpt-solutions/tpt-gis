@@ -1,11 +1,11 @@
 # tpt-gis
 
-A pure Rust, `no_std`-capable, planetary-scale GIS engine — a zero-FFI
-replacement for the GDAL/PROJ/GEOS stack.
+A pure Rust, `no_std`-capable, planetary-scale GIS engine — a zero-FFI replacement
+for the GDAL/PROJ/GEOS stack.
 
-`tpt-gis` is a convenience **facade** that re-exports the five engine crates
-behind feature flags, so most users depend on this single crate rather than the
-individual ones.
+`tpt-gis` is a convenience **facade** that re-exports the five engine crates behind
+feature flags, so most users depend on this single crate rather than the individual
+ones.
 
 ## Installation
 
@@ -16,6 +16,18 @@ cargo add tpt-gis
 All five engine crates are enabled by default. Each can be toggled individually;
 `io` / `index` imply `geom`, and `http` implies `raster` plus the async HTTP
 Range-request reader.
+
+## Feature flags
+
+| Feature | Default | Enables                                                  |
+| ------- | ------- | -------------------------------------------------------- |
+| `std`   | on      | Host `std` math intrinsics for `core`/`geom`.            |
+| `core`  | on      | CRS definitions, datum transforms, geodesic math.        |
+| `geom`  | on      | Vector geometry + topological predicates.                |
+| `io`    | on      | GeoJSON/WKB/WKT/Shapefile parsers + writers.             |
+| `index` | on      | R-Trees, Quadtrees, H3/S2.                               |
+| `raster`| on      | Grid data, map algebra, COG/GeoTIFF parsing.             |
+| `http`  | off     | Async HTTP Range-request streaming reader for COGs.      |
 
 ## Example
 
@@ -41,8 +53,8 @@ println!("point = ({}, {})", p.x, p.y);
 - `tpt-gis-index` — R-Trees, Quadtrees, H3 / S2.
 - `tpt-gis-raster` — grid data, map algebra, COG / GeoTIFF parsing.
 
-See the [workspace README](https://github.com/tpt-solutions/tpt-gis) for the
-full design rationale and examples.
+See the [workspace README](https://github.com/tpt-solutions/tpt-gis) for the full
+design rationale and the runnable `examples/` in each crate.
 
 ## License
 

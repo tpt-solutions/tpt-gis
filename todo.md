@@ -135,7 +135,9 @@ Source design doc: `spec.txt`.
 - [x] Quadtree implementation
 - [x] Decide H3 strategy: pure-Rust reimplementation vs wrapping an existing pure-Rust crate (zero-FFI principle)
 - [x] H3 hexagonal grid integration
-- [ ] S2 grid integration
+- [x] S2 grid integration — implemented as a Z-order/Morton curve (`s2.rs`), not
+      byte-compatible with Google's Hilbert-curve S2; see the deferred
+      byte-compatibility item under "Security Audit & Correctness Fixes" below
 - [x] Spatial-join algorithm built on R-Tree
 
 ### MVP 1 — Planetary-Scale Spatial Join Engine
@@ -316,3 +318,65 @@ these are things a previous pass marked `[x]` done that don't actually work.
       verified locally against the full dependency tree including dev-dependencies —
       exit code 0); no separate `cargo-audit` added, but `cargo-deny`'s
       `[advisories]` check covers the same RUSTSEC advisory database
+
+---
+
+## Security Hardening & Adoption Tooling (2026-08-20 review)
+
+Found during a follow-up full project review (security audit + stub/todo sweep +
+adoption-tooling assessment). No literal stubs/`TODO`s remain in `src/` anywhere in
+the workspace — the items below are new hardening/ergonomics work, not unfinished
+features from an earlier pass.
+
+### COG HTTP / raster hardening (security)
+- [ ] `HttpTransport::fetch_range` (`tpt-gis-raster/src/http.rs`) accepts any 2xx
+      status, not just `206 Partial Content` — a Range-unaware origin returning
+      `200 OK` with the full body makes the reader silently buffer the entire file
+      before truncating, defeating the module's own "read without downloading the
+      whole file" promise. Extract a pure `validate_range_response` helper that
+      hard-errors on `200`/anything but `206`, plus a defense-in-depth check that
+      a `206`'s `Content-Length` doesn't exceed the requested range.
+- [ ] `CogRangeReader::new` builds `reqwest::Client::new()` with no timeout — a
+      hung/slow-loris origin blocks forever. Add `.timeout(30s)`/`.connect_timeout(10s)`
+      via `Client::builder()`.
+- [ ] `decode_window` (`tpt-gis-raster/src/geotiff.rs`) calls `self.fetch(offset,
+      byte_count)` with `byte_count` taken directly from the untrusted
+      `StripByteCounts`/`TileByteCounts` IFD tags, before any size check (only the
+      *decompressed* size is capped, via `MAX_DECODE_BYTES`). A crafted COG can
+      declare a huge per-tile byte count, reaching a fetch (and, over HTTP, a real
+      Range request) before rejection. Add a `MAX_RAW_CHUNK_BYTES` cap validated in
+      `image_info_from` right after `chunks` is built (closes both the local
+      `decode_window` path and the HTTP `read_region` prefetch-loop path, which
+      calls `transport.fetch_range` directly with the same untrusted count).
+- [ ] No fuzz target covers the hand-rolled GeoPackage/SQLite b-tree reader
+      (`tpt-gis-io/src/geopackage/`) or the Shapefile DBF reader (`read_dbf`) — add
+      `tpt-gis-io/fuzz/fuzz_targets/{geopackage,dbf}.rs`.
+- [ ] (deferred, lower severity, noted but not blocking) `decode_lzw` decodes the
+      full LZW stream via `weezl` before checking the result against
+      `MAX_DECODE_BYTES`, so a pathological stream can force a large intermediate
+      allocation before the existing post-decode check fires; and
+      `last_data_offset`'s `offset + count` sum is unchecked (partially mitigated
+      by the `MAX_RAW_CHUNK_BYTES` cap above, but `offset` itself is still
+      attacker-controlled).
+
+### Adoption ergonomics
+- [ ] Root `README.md` quickstart code block + CI/license/MSRV badges
+- [ ] `prelude` module on the `tpt-gis` facade crate for one-line ergonomic imports
+- [ ] Promote `examples/spatial-join-cli` to a real installable `tpt-gis-cli` crate
+      (`cargo install tpt-gis-cli`, binary name `tptgis`), leaving its criterion
+      benchmark behind so the publishable crate stays lean; update `PUBLISHING.md`'s
+      publish order and root `Cargo.toml` members accordingly
+- [ ] Python bindings (`bindings/tpt-gis-py`, pyo3 + maturin) — v0.1 scope:
+      `Geometry` (WKT/WKB/GeoJSON round-trip + `contains_point`), shapefile read,
+      `GeoPoint`/geodesic distance from `tpt-gis-core`. Deferred: raster/COG, the
+      index crate, GeoPackage, projections, numpy interop. Needs a new CI job
+      (matrixed 3-OS, `maturin develop` + `pytest`) and a workspace `exclude` entry
+      (builds via maturin, not plain `cargo build`, same as the wasm demo)
+
+### Housekeeping (flagged, not actioned)
+- [ ] Six untracked `CHANGELOG.md` files (one per crate) plus
+      `tpt-gis-core/examples/geodesic_demo.rs` and
+      `tpt-gis-geom/examples/geometry_demo.rs` sit in the working tree from a prior
+      session but aren't committed — `cargo package`/`cargo publish` only includes
+      VCS-tracked files by default, so these need `git add`/commit before any
+      crates.io publish
