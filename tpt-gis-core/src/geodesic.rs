@@ -310,6 +310,7 @@ fn max_zero(x: f64) -> f64 {
 // ----------------------------------------------------------------------------
 
 /// The ellipsoid constants and series coefficients for one ellipsoid.
+#[derive(Debug, Clone, Copy)]
 struct Karney {
     a: f64,
     f: f64,
@@ -1185,6 +1186,75 @@ fn area_reduce(area_sum: f64, area0: f64, crossings: i32) -> f64 {
     0.0 + area
 }
 
+/// Points at equal arc-length steps along the shortest path from `p1` to `p2`, as an iterator.
+///
+/// The first point is `p1`, the last is `p2`, and there are `steps + 1` points in all. Each
+/// point comes from the direct problem, so the spacing is exact along the ellipsoid, not in
+/// degrees.
+///
+/// # Errors
+/// Returns the errors of [`inverse`] for the two end points.
+pub fn sample(
+    ellipsoid: &Ellipsoid,
+    p1: GeoPoint,
+    p2: GeoPoint,
+    steps: u32,
+) -> Result<GeodesicSamples, GeodesicError> {
+    let solution = inverse(ellipsoid, p1, p2)?;
+    Ok(GeodesicSamples {
+        karney: Karney::new(ellipsoid)?,
+        start: p1,
+        end: p2,
+        azimuth_deg: solution.initial_bearing_deg,
+        distance_m: solution.distance_m,
+        steps,
+        index: 0,
+    })
+}
+
+/// The points produced by [`sample`]: an iterator over the geodesic's equal steps.
+#[derive(Debug, Clone)]
+pub struct GeodesicSamples {
+    karney: Karney,
+    start: GeoPoint,
+    end: GeoPoint,
+    azimuth_deg: f64,
+    distance_m: f64,
+    steps: u32,
+    index: u32,
+}
+
+impl Iterator for GeodesicSamples {
+    type Item = GeoPoint;
+
+    fn next(&mut self) -> Option<GeoPoint> {
+        if self.index > self.steps {
+            return None;
+        }
+        let index = self.index;
+        self.index += 1;
+        if index == 0 {
+            return Some(self.start);
+        }
+        if index == self.steps {
+            // The last point is the end point itself, not a solution that rounding can move.
+            return Some(self.end);
+        }
+        let s = self.distance_m * f64::from(index) / f64::from(self.steps);
+        let (lat, mut lon, _) =
+            self.karney.direct(self.start.lat_deg, self.start.lon_deg, self.azimuth_deg, s);
+        if lon >= 180.0 {
+            lon -= 360.0;
+        }
+        Some(GeoPoint::new(lat, lon))
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let left = (self.steps + 1).saturating_sub(self.index) as usize;
+        (left, Some(left))
+    }
+}
+
 /// Solves the geodesic direct problem: given a start point, initial bearing, and
 /// distance, finds the destination point and the bearing on arrival, on `ellipsoid`.
 ///
@@ -1423,5 +1493,53 @@ mod tests {
         // Measured worst case: 7.3e-9, on a small clockwise polygon. Its edge terms are of the
         // order of the sphere's area, so the sum rounds at about 1 m² there.
         assert!(worst_area < 1e-8, "worst relative area error {worst_area} on {worst_row}");
+    }
+
+    /// GeographicLib's `InverseLine` positions (see `tests/fixtures/geographiclib_sample.csv`):
+    /// 50 geodesics, each sampled at nine equal steps.
+    #[test]
+    fn sample_matches_geographiclib_line_positions() {
+        let text = include_str!("../tests/fixtures/geographiclib_sample.csv");
+        let e = &Ellipsoid::WGS84;
+        let mut worst = 0.0_f64;
+        let mut checked = 0;
+        for line in text.lines().filter(|l| !l.starts_with('#') && !l.trim().is_empty()) {
+            let mut fields = line.split(';');
+            let mut next = || fields.next().unwrap().parse::<f64>().unwrap();
+            let p1 = GeoPoint::new(next(), next());
+            let p2 = GeoPoint::new(next(), next());
+            let steps = next() as u32;
+            let samples = sample(e, p1, p2, steps).unwrap();
+            let mut count = 0;
+            for (got, index) in samples.zip(0..) {
+                let want = GeoPoint::new(next(), next());
+                let dlon = ((got.lon_deg - want.lon_deg) % 360.0 + 540.0) % 360.0 - 180.0;
+                worst = worst.max((got.lat_deg - want.lat_deg).abs()).max(dlon.abs());
+                assert!(index <= steps, "too many samples");
+                count += 1;
+            }
+            assert_eq!(count, steps + 1);
+            checked += 1;
+        }
+        assert_eq!(checked, 50);
+        // Measured worst case: 3.0e-10 deg.
+        assert!(worst < 1e-9, "worst position error {worst} deg");
+    }
+
+    /// The sample at each end is the end point itself.
+    #[test]
+    fn sample_starts_and_ends_at_the_given_points() {
+        let p1 = GeoPoint::new(10.0, 20.0);
+        let p2 = GeoPoint::new(-30.0, 60.0);
+        let points: [GeoPoint; 5] = {
+            let mut out = [p1; 5];
+            for (slot, point) in out.iter_mut().zip(sample(&Ellipsoid::WGS84, p1, p2, 4).unwrap()) {
+                *slot = point;
+            }
+            out
+        };
+        assert_eq!(points[0], p1);
+        assert_eq!(points[4], p2);
+        assert_eq!(sample(&Ellipsoid::WGS84, p1, p2, 0).unwrap().count(), 1);
     }
 }

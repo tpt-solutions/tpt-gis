@@ -8,6 +8,8 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Added
 - `geodesic::polygon_measure`: perimeter and enclosed area of a polygon on the ellipsoid, as
   GeographicLib's `PolygonArea` computes them (antimeridian and pole handling included).
+- `geodesic::sample`: points at equal arc-length steps along the geodesic between two points,
+  as an iterator (both end points included).
 
 ### Changed
 - `geodesic` now uses Karney's algorithm (a port of GeographicLib, MIT/X11) in place of

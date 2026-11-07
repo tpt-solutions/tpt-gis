@@ -513,7 +513,8 @@ the same logic, not real GDAL/QGIS/libtiff output; add third-party fixtures.
 - [x] Karney geodesics (fixes Vincenty antipodal failure) — inverse and direct, checked
       against GeographicLib. Polygon area and perimeter (`geodesic::polygon_measure`) are done,
       checked against GeographicLib's PolygonArea on 225 polygons (relative area error 7e-9
-      worst case); not done: line sampling
+      worst case). Equal-step sampling along a geodesic (`geodesic::sample`) is done, checked
+      against GeographicLib's InverseLine to 3e-10 deg.
 - [ ] I/O: ISO WKB Z/M + EWKB; WKT `EMPTY`/`Z`/`SRID=`; bare GeoJSON Feature/Geometry,
       `properties: null`; shapefile `.prj`/`.cpg`/Z types + writer; GeoPackage
       WITHOUT ROWID + R-tree tables
