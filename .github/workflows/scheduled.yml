@@ -1,0 +1,65 @@
+name: Scheduled
+
+# Weekly checks that do not need to run on every change: new security advisories against the
+# locked dependencies, and a short fuzz run of every parser. Run by hand with "workflow_dispatch".
+
+on:
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  advisories:
+    name: cargo-deny (advisories)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2
+        with:
+          command: check advisories
+
+  fuzz:
+    name: fuzz ${{ matrix.target }} (${{ matrix.crate }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - crate: tpt-gis-io
+            target: geojson
+          - crate: tpt-gis-io
+            target: wkt
+          - crate: tpt-gis-io
+            target: wkb
+          - crate: tpt-gis-io
+            target: shapefile
+          - crate: tpt-gis-io
+            target: dbf
+          - crate: tpt-gis-io
+            target: geopackage
+          - crate: tpt-gis-raster
+            target: geotiff
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@2c76c034f9e32a5d6e2c104dc4df23a22476db04 # nightly
+        with:
+          toolchain: nightly
+      - run: cargo install cargo-fuzz --locked
+      - name: Fuzz for five minutes
+        working-directory: ${{ matrix.crate }}/fuzz
+        run: cargo fuzz run ${{ matrix.target }} -- -max_total_time=300
+      - name: Keep any crashing input
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: fuzz-crash-${{ matrix.crate }}-${{ matrix.target }}
+          path: ${{ matrix.crate }}/fuzz/artifacts/${{ matrix.target }}
+          if-no-files-found: ignore
