@@ -181,6 +181,8 @@ const TAG_GDAL_NODATA: u16 = 42113;
 /// GeoKey IDs of interest.
 const GEOKEY_GEOGRAPHIC_TYPE: u16 = 2048;
 const GEOKEY_PROJECTED_TYPE: u16 = 3072;
+/// GeoKey: whether raster coordinates refer to pixel areas (1) or pixel centres (2).
+const GEOKEY_RASTER_TYPE: u16 = 1025;
 
 /// A parsed IFD entry, with its bytes read out (whether they were inlined in the
 /// entry or stored at an offset elsewhere in the file).
@@ -909,6 +911,7 @@ fn read_georeferencing(
     little: bool,
 ) -> Result<(Option<GeoTransform>, Option<u32>)> {
     let mut epsg = None;
+    let mut pixel_is_point = false;
     if let Some(dir) = ifd.get(TAG_GEO_KEY_DIRECTORY) {
         if let Some(shorts) = dir.as_u16s(little) {
             let mut i = 4;
@@ -922,10 +925,16 @@ fn read_georeferencing(
                 {
                     epsg = Some(value_offset as u32);
                 }
+                if key == GEOKEY_RASTER_TYPE && location == 0 {
+                    pixel_is_point = value_offset == 2;
+                }
                 i += 4;
             }
         }
     }
+    // Under PixelIsPoint the tiepoint and transform refer to pixel centres, so the image
+    // corner (the origin) lies half a pixel up and to the left of them.
+    let centre = if pixel_is_point { 0.5 } else { 0.0 };
 
     if let Some(transform) = ifd.get(TAG_MODEL_TRANSFORMATION) {
         let m = transform
@@ -934,8 +943,8 @@ fn read_georeferencing(
         if m.len() < 16 {
             return Err(GeoTiffError::BadGeoreferencing("truncated ModelTransformationTag"));
         }
-        let origin_x = m[3];
-        let origin_y = m[7];
+        let origin_x = m[3] - centre * (m[0] + m[1]);
+        let origin_y = m[7] - centre * (m[4] + m[5]);
         let pixel_width = m[0];
         let pixel_height = -m[5];
         let gt = GeoTransform::try_new(origin_x, origin_y, pixel_width, pixel_height)
@@ -950,8 +959,8 @@ fn read_georeferencing(
             let sx = scale[0];
             let sy = scale[1];
             let (i, j, x, y) = (tie[0], tie[1], tie[3], tie[4]);
-            let origin_x = x - i * sx;
-            let origin_y = y + j * sy;
+            let origin_x = x - (i + centre) * sx;
+            let origin_y = y + (j + centre) * sy;
             let gt = GeoTransform::try_new(origin_x, origin_y, sx, sy)
                 .map_err(|_| GeoTiffError::BadGeoreferencing("non-positive pixel scale"))?;
             Ok((Some(gt), epsg))
@@ -1623,6 +1632,27 @@ mod tests {
 
     /// A 2×3 uncompressed image with RowsPerStrip = 2: the second strip holds a single
     /// row. Its decode must use the short row count, not the declared rows per strip.
+    /// Under PixelIsPoint the tiepoint is the centre of the first pixel, so the image corner
+    /// is half a pixel up and to the left. The fixture is patched from PixelIsArea (the
+    /// default) to PixelIsPoint, where the corner moves from (0, 2) to (-0.5, 2.5) for a
+    /// 2x2 image with unit pixels.
+    #[test]
+    fn pixel_is_point_shifts_the_origin_half_a_pixel() {
+        let mut bytes = testsupport::make_cog(2, 2, 2, 2, |_, _| 1);
+        // GeoKeys: [1,1,0,1, 3072,0,1,3857] (ProjectedCSType). Patch to
+        // [1,1,0,1, 1025,0,1,2] (GTRasterTypeGeoKey = PixelIsPoint).
+        let needle: Vec<u8> =
+            [1u16, 1, 0, 1, 3072, 0, 1, 3857].iter().flat_map(|v| v.to_le_bytes()).collect();
+        let at = bytes.windows(needle.len()).position(|w| w == needle.as_slice()).unwrap();
+        let patched: Vec<u8> =
+            [1u16, 1, 0, 1, 1025, 0, 1, 2].iter().flat_map(|v| v.to_le_bytes()).collect();
+        bytes[at..at + patched.len()].copy_from_slice(&patched);
+        let band = GeoTiff::parse(&bytes).unwrap().read().unwrap();
+        let t = band.transform();
+        assert!((t.origin_x() + 0.5).abs() < 1e-9, "origin_x {}", t.origin_x());
+        assert!((t.origin_y() - 2.5).abs() < 1e-9, "origin_y {}", t.origin_y());
+    }
+
     /// Without a geotransform, a window's origin must match the full image's origin
     /// shifted by the window offset. The window here ends above the image bottom.
     #[test]
