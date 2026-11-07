@@ -136,9 +136,13 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install maturin pytest mypy
-      - name: Build & install the extension into a venv
+      - name: Build the wheel and install it
+        # `maturin develop` requires an active virtualenv; CI runners have none,
+        # so build a wheel and install it straight into the runner's Python.
         working-directory: bindings/tpt-gis-py
-        run: maturin develop
+        run: |
+          maturin build --release --out dist
+          python -m pip install --no-index --find-links dist tpt-gis-py
       - name: Run the pytest suite
         working-directory: bindings/tpt-gis-py
         run: pytest -v
@@ -180,6 +184,10 @@ jobs:
   fuzz:
     name: cargo-fuzz (compile fuzz targets)
     runs-on: ubuntu-latest
+    # The root rust-toolchain.toml pins stable, which overrides the nightly default set by the
+    # toolchain action below. -Zsanitizer needs nightly, so force it for every step in this job.
+    env:
+      RUSTUP_TOOLCHAIN: nightly
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: dtolnay/rust-toolchain@2c76c034f9e32a5d6e2c104dc4df23a22476db04 # nightly

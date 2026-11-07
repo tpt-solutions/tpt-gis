@@ -29,6 +29,10 @@ jobs:
     name: fuzz ${{ matrix.target }} (${{ matrix.crate }})
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # The root rust-toolchain.toml pins stable, which overrides the nightly default set by the
+    # toolchain action below. cargo-fuzz needs nightly, so force it for every step in this job.
+    env:
+      RUSTUP_TOOLCHAIN: nightly
     strategy:
       fail-fast: false
       matrix:
