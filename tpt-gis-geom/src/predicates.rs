@@ -11,16 +11,34 @@ use crate::point::Point;
 use crate::polygon::Polygon;
 
 /// Tolerance used when classifying near-zero cross products (collinearity) and
-/// near-boundary conditions in these predicates.
+/// near-boundary conditions in these predicates. It is a floor: near-boundary tests use
+/// `tolerance_for`, which grows with the coordinate magnitude.
 pub const EPSILON: f64 = 1e-9;
+
+/// Relative part of the nearness tolerance: about 45 units in the last place of the
+/// coordinate magnitude (f64 spacing is about 2.2e-16 relative).
+const RELATIVE_TOLERANCE: f64 = 1e-14;
+
+/// The nearness tolerance for a set of points: [`EPSILON`], or [`RELATIVE_TOLERANCE`] times
+/// the largest coordinate magnitude if that is larger. Below about 1e5 the absolute floor
+/// applies, so ordinary coordinates behave as before. Beyond that, rounding noise grows
+/// with magnitude and the absolute floor would fall below it.
+fn tolerance_for(points: &[Point]) -> f64 {
+    let magnitude = points.iter().fold(0.0_f64, |m, p| m.max(p.x.abs()).max(p.y.abs()));
+    EPSILON.max(RELATIVE_TOLERANCE * magnitude)
+}
 
 /// Returns `true` if `point` lies inside `ring`, using the even-odd (ray casting) rule.
 ///
 /// `ring` is treated as a closed polygon boundary (it does not need to literally repeat
 /// its first point as its last — the edge from the last point back to the first is
-/// always included). Points exactly on the boundary may be classified as inside or
-/// outside depending on which edge they fall on; this matches the standard PNPOLY
-/// algorithm's well-known behavior.
+/// always included).
+///
+/// The boundary is not classified separately. A point exactly on an edge follows the
+/// half-open PNPOLY rule, so the result depends on which side of the ring the edge is on:
+/// a point on the left or bottom edge of a square is inside, and one on its right or top
+/// edge is outside. Use [`Polygon::contains_point`](crate::Polygon::contains_point) or the
+/// OGC predicates when boundary contact should count as covered.
 #[must_use]
 pub fn point_in_ring(point: Point, ring: &[Point]) -> bool {
     let n = ring.len();
@@ -69,10 +87,11 @@ fn orientation(p: Point, q: Point, r: Point) -> Orientation {
 /// Returns `true` if `q` lies on the segment `p`-`r`, given that `p`, `q`, `r` are
 /// already known to be collinear.
 fn on_segment(p: Point, q: Point, r: Point) -> bool {
-    q.x <= p.x.max(r.x) + EPSILON
-        && q.x >= p.x.min(r.x) - EPSILON
-        && q.y <= p.y.max(r.y) + EPSILON
-        && q.y >= p.y.min(r.y) - EPSILON
+    let tol = tolerance_for(&[p, q, r]);
+    q.x <= p.x.max(r.x) + tol
+        && q.x >= p.x.min(r.x) - tol
+        && q.y <= p.y.max(r.y) + tol
+        && q.y >= p.y.min(r.y) - tol
 }
 
 /// Returns `true` if segments `p1`-`q1` and `p2`-`q2` intersect or touch.
@@ -172,7 +191,7 @@ pub fn polygons_intersect(a: &Polygon, b: &Polygon) -> bool {
 /// 3. no hole of `outer` pokes into `inner`'s region.
 ///
 /// Rings are assumed simple and closed. Points exactly on the boundary are treated
-/// as covered (OGC-style). If an edge is cut more than [`MAX_CUTS`] times the
+/// as covered (OGC-style). If an edge is cut more than `MAX_CUTS` times the
 /// function conservatively returns `false`.
 #[must_use]
 pub fn polygon_contains_polygon(outer: &Polygon, inner: &Polygon) -> bool {
@@ -228,12 +247,13 @@ fn covers_point(poly: &Polygon, p: Point) -> bool {
     poly.contains_point(p) || on_polygon_boundary(poly, p)
 }
 
-/// `true` if `p` is on the boundary of `poly` (within [`EPSILON`]).
+/// `true` if `p` is on the boundary of `poly` (within [`tolerance_for`] of the polygon's
+/// coordinates).
 fn on_polygon_boundary(poly: &Polygon, p: Point) -> bool {
     rings(poly).any(|ring| {
         (0..ring.len()).any(|i| {
             let (a, b) = ring_edges(ring, i);
-            distance::point_to_segment(p, a, b) <= EPSILON
+            distance::point_to_segment(p, a, b) <= tolerance_for(&[p, a, b])
         })
     })
 }
@@ -452,5 +472,42 @@ mod tests {
         let poly_outer = Polygon::from_exterior(&outer);
         let poly_inner = Polygon::from_exterior(&inner);
         assert!(!polygon_contains_polygon(&poly_outer, &poly_inner));
+    }
+}
+
+#[cfg(test)]
+mod tolerance_tests {
+    use super::*;
+
+    #[test]
+    fn point_in_ring_boundary_is_half_open() {
+        let square = [
+            Point::new(0.0, 0.0),
+            Point::new(10.0, 0.0),
+            Point::new(10.0, 10.0),
+            Point::new(0.0, 10.0),
+        ];
+        // Left and bottom edges count as inside; right and top edges as outside.
+        assert!(point_in_ring(Point::new(0.0, 5.0), &square));
+        assert!(point_in_ring(Point::new(5.0, 0.0), &square));
+        assert!(!point_in_ring(Point::new(10.0, 5.0), &square));
+        assert!(!point_in_ring(Point::new(5.0, 10.0), &square));
+    }
+
+    /// Two collinear segments that meet within one unit of rounding at 1e9 scale. An
+    /// absolute tolerance of 1e-9 is below that spacing and would call them disjoint.
+    #[test]
+    fn segments_touch_within_rounding_at_large_magnitude() {
+        let big = 1.0e9_f64;
+        let ulp = f64::from_bits(big.to_bits() + 1) - big; // spacing of doubles at 1e9
+        let a1 = Point::new(0.0, 0.0);
+        let a2 = Point::new(big, big);
+        let b1 = Point::new(big + ulp * 8.0, big);
+        let b2 = Point::new(2.0 * big, 2.0 * big);
+        assert!(segments_intersect(a1, a2, b1, b2));
+        // Far apart at the same magnitude: still disjoint.
+        let c1 = Point::new(big + 1.0, big);
+        let c2 = Point::new(2.0 * big, 2.0 * big);
+        assert!(!segments_intersect(a1, a2, c1, c2));
     }
 }

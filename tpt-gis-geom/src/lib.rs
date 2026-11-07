@@ -5,7 +5,7 @@
 //! allocation — the requirement driving the drone geofence MVP (see `todo.md`).
 //!
 //! Polygon boolean operations (`union`, `intersection`, `difference`,
-//! `symmetric_difference`) are in [`clip`], behind the `alloc` feature, because their
+//! `symmetric_difference`) are in `clip`, behind the `alloc` feature, because their
 //! output must be allocated. They use the Martinez–Rueda–Feito sweep. `buffer` is not
 //! implemented yet.
 
