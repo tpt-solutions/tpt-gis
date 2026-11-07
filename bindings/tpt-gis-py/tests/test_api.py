@@ -104,3 +104,36 @@ def test_empty_geometry_has_no_bounds():
     empty = gis.Geometry.from_geojson('{"type": "GeometryCollection", "geometries": []}')
     assert empty.bounds is None
     assert math.isclose(empty.area, 0.0)
+
+
+def test_coordinates_returns_every_vertex_as_an_array():
+    np = pytest.importorskip("numpy")
+    from tpt_gis_py import Geometry, coordinates
+
+    point = Geometry.from_wkt("POINT (1 2)")
+    assert coordinates(point).tolist() == [[1.0, 2.0]]
+
+    line = Geometry.from_wkt("LINESTRING (0 0, 3 4, 6 0)")
+    arr = coordinates(line)
+    assert arr.dtype == np.float64 and arr.shape == (3, 2)
+    assert arr.tolist() == [[0.0, 0.0], [3.0, 4.0], [6.0, 0.0]]
+
+
+def test_coordinates_lists_the_exterior_then_the_holes():
+    pytest.importorskip("numpy")
+    from tpt_gis_py import Geometry, coordinates
+
+    poly = Geometry.from_wkt(
+        "POLYGON ((0 0, 10 0, 10 10, 0 10, 0 0), (2 2, 4 2, 4 4, 2 4, 2 2))"
+    )
+    arr = coordinates(poly)
+    assert arr.shape == (10, 2)
+    assert arr[0].tolist() == [0.0, 0.0] and arr[5].tolist() == [2.0, 2.0]
+
+
+def test_coordinates_of_a_collection_walks_its_members():
+    pytest.importorskip("numpy")
+    from tpt_gis_py import Geometry, coordinates
+
+    gc = Geometry.from_wkt("GEOMETRYCOLLECTION (POINT (7 8), LINESTRING (1 1, 2 2))")
+    assert coordinates(gc).tolist() == [[7.0, 8.0], [1.0, 1.0], [2.0, 2.0]]

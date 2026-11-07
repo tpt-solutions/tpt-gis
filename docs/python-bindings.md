@@ -67,6 +67,17 @@ All three functions take an optional `ellipsoid="wgs84"` (or `"grs80"`) keyword
 argument; WGS84 is the default. The underlying math is Karney's inverse/direct
 solution (a port of GeographicLib) on the reference ellipsoid.
 
+### Coordinates as NumPy
+
+`coordinates(geometry)` returns every vertex as an `(n, 2)` float64 array, with rings in
+order (exterior, then holes). NumPy is imported only when this function is called.
+
+```python
+import tpt_gis_py as gis
+gis.coordinates(gis.Geometry.from_wkt("LINESTRING (0 0, 3 4, 6 0)")).tolist()
+# [[0.0, 0.0], [3.0, 4.0], [6.0, 0.0]]
+```
+
 ### Shapefile reading
 
 ```python

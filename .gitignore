@@ -27,3 +27,6 @@ Thumbs.db
 **/__pycache__/
 **/*.pyc
 # Cargo.lock is tracked: the CLI and Python extension ship binaries and need reproducible builds.
+
+# Built Python extensions (maturin develop writes these into the source tree)
+*.pyd
