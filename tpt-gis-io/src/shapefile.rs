@@ -270,6 +270,15 @@ fn parse_multipoint_record(cursor: &mut Cursor<'_>) -> Result<Geometry, Shapefil
 /// [`ShapefileError::UnsupportedShapeType`] for Z/M or unrecognized shape types, and
 /// [`ShapefileError::UnexpectedEndOfInput`] if the file is truncated.
 pub fn read_shp(bytes: &[u8]) -> Result<Vec<Geometry>, ShapefileError> {
+    Ok(read_shp_records(bytes)?.into_iter().flatten().collect())
+}
+
+/// Reads every record of a `.shp` file, keeping a `None` for each null shape (and each
+/// polygon with no parts). Record `i` therefore lines up with row `i` of the `.dbf`.
+///
+/// # Errors
+/// As [`read_shp`].
+pub fn read_shp_records(bytes: &[u8]) -> Result<Vec<Option<Geometry>>, ShapefileError> {
     let mut header = Cursor::new(bytes);
 
     let file_code = header.i32_be()?;
@@ -292,7 +301,7 @@ pub fn read_shp(bytes: &[u8]) -> Result<Vec<Geometry>, ShapefileError> {
     debug_assert_eq!(header.pos, 100, "shp header is exactly 100 bytes");
 
     let mut cursor = header;
-    let mut geometries = Vec::new();
+    let mut records = Vec::new();
 
     while !cursor.is_at_end() {
         // Record header: big-endian record number (unused) then big-endian content
@@ -315,12 +324,10 @@ pub fn read_shp(bytes: &[u8]) -> Result<Vec<Geometry>, ShapefileError> {
             shape_type::MULTIPOINT => Some(parse_multipoint_record(&mut record)?),
             other => return Err(ShapefileError::UnsupportedShapeType(other)),
         };
-        if let Some(geometry) = geometry {
-            geometries.push(geometry);
-        }
+        records.push(geometry);
     }
 
-    Ok(geometries)
+    Ok(records)
 }
 
 // ---------------------------------------------------------------------------------
@@ -366,6 +373,58 @@ struct FieldDescriptor {
     length: usize,
 }
 
+/// How a `.dbf`'s character fields are encoded. The `.cpg` sidecar names it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DbfEncoding {
+    /// UTF-8. Invalid sequences become U+FFFD rather than failing the read.
+    Utf8,
+    /// ISO 8859-1: every byte is the code point of the same value.
+    Latin1,
+    /// Windows-1252, the common Western European code page of legacy `.dbf` files.
+    Windows1252,
+}
+
+/// Windows-1252 code points for bytes 0x80 to 0x9F. Undefined bytes map to the C1
+/// control character with the same value, as WHATWG decoders do.
+const WINDOWS_1252_HIGH: [char; 32] = [
+    '\u{20AC}', '\u{0081}', '\u{201A}', '\u{0192}', '\u{201E}', '\u{2026}', '\u{2020}', '\u{2021}',
+    '\u{02C6}', '\u{2030}', '\u{0160}', '\u{2039}', '\u{0152}', '\u{008D}', '\u{017D}', '\u{008F}',
+    '\u{0090}', '\u{2018}', '\u{2019}', '\u{201C}', '\u{201D}', '\u{2022}', '\u{2013}', '\u{2014}',
+    '\u{02DC}', '\u{2122}', '\u{0161}', '\u{203A}', '\u{0153}', '\u{009D}', '\u{017E}', '\u{0178}',
+];
+
+impl DbfEncoding {
+    /// Decodes one field's bytes to a string (without trimming).
+    #[must_use]
+    pub fn decode(self, bytes: &[u8]) -> String {
+        match self {
+            DbfEncoding::Utf8 => String::from_utf8_lossy(bytes).into_owned(),
+            DbfEncoding::Latin1 => bytes.iter().map(|&b| char::from(b)).collect(),
+            DbfEncoding::Windows1252 => bytes
+                .iter()
+                .map(|&b| match b {
+                    0x80..=0x9F => WINDOWS_1252_HIGH[usize::from(b - 0x80)],
+                    _ => char::from(b),
+                })
+                .collect(),
+        }
+    }
+}
+
+/// The encoding named by a `.cpg` file's contents, or `None` if it is not recognised
+/// (in which case callers keep their default).
+#[must_use]
+pub fn encoding_from_cpg(text: &str) -> Option<DbfEncoding> {
+    match text.trim().to_ascii_uppercase().as_str() {
+        "UTF-8" | "UTF8" => Some(DbfEncoding::Utf8),
+        "ISO-8859-1" | "ISO8859-1" | "8859-1" | "LATIN1" | "LATIN-1" | "ISO-8859-15" => {
+            Some(DbfEncoding::Latin1)
+        }
+        "CP1252" | "WINDOWS-1252" | "1252" => Some(DbfEncoding::Windows1252),
+        _ => None,
+    }
+}
+
 fn trimmed_ascii(bytes: &[u8]) -> String {
     // Lossy rather than strict: real-world `.dbf` Character fields are frequently not
     // valid UTF-8 (legacy code pages, etc.). `from_utf8_lossy` replaces bad bytes with
@@ -380,9 +439,13 @@ fn trimmed_ascii(bytes: &[u8]) -> String {
 /// Returns [`ShapefileError::InvalidNumericField`] if an `N`/`F` field's text doesn't
 /// parse as an `f64`, [`ShapefileError::InvalidDateField`] if a `D` field's text isn't
 /// 8 ASCII digits, and [`ShapefileError::InvalidFieldType`] for an unsupported type byte.
-fn parse_field_value(field_type: u8, raw: &[u8]) -> Result<DbfValue, ShapefileError> {
+fn parse_field_value(
+    field_type: u8,
+    raw: &[u8],
+    encoding: DbfEncoding,
+) -> Result<DbfValue, ShapefileError> {
     match field_type {
-        b'C' => Ok(DbfValue::Character(trimmed_ascii(raw))),
+        b'C' => Ok(DbfValue::Character(encoding.decode(raw).trim().to_string())),
         b'N' | b'F' => {
             let text = trimmed_ascii(raw);
             if text.is_empty() {
@@ -436,6 +499,18 @@ fn parse_field_value(field_type: u8, raw: &[u8]) -> Result<DbfValue, ShapefileEr
 /// Returns [`ShapefileError::UnexpectedEndOfInput`] if the file is truncated, plus the
 /// field-parsing errors described above.
 pub fn read_dbf(bytes: &[u8]) -> Result<Vec<DbfRecord>, ShapefileError> {
+    read_dbf_with(bytes, DbfEncoding::Utf8)
+}
+
+/// Reads every record of a `.dbf` file, decoding character fields with `encoding`
+/// (see [`encoding_from_cpg`]).
+///
+/// # Errors
+/// As [`read_dbf`].
+pub fn read_dbf_with(
+    bytes: &[u8],
+    encoding: DbfEncoding,
+) -> Result<Vec<DbfRecord>, ShapefileError> {
     let mut cursor = Cursor::new(bytes);
 
     // Byte 0: version (ignored). Bytes 1-3: date of last update (ignored).
@@ -469,7 +544,7 @@ pub fn read_dbf(bytes: &[u8]) -> Result<Vec<DbfRecord>, ShapefileError> {
         cursor.skip(1 + 14)?;
 
         let name_end = name_bytes.iter().position(|&b| b == 0).unwrap_or(name_bytes.len());
-        let name = String::from_utf8_lossy(&name_bytes[..name_end]).trim().to_string();
+        let name = encoding.decode(&name_bytes[..name_end]).trim().to_string();
 
         // Fail fast on an unsupported field type here (rather than only when a
         // record's value is parsed) so a malformed schema is reported immediately.
@@ -502,7 +577,7 @@ pub fn read_dbf(bytes: &[u8]) -> Result<Vec<DbfRecord>, ShapefileError> {
         let mut values = Vec::with_capacity(fields.len());
         for field in &fields {
             let raw = cursor.take(field.length)?;
-            let value = parse_field_value(field.field_type, raw)?;
+            let value = parse_field_value(field.field_type, raw, encoding)?;
             values.push((field.name.clone(), value));
         }
 
@@ -955,5 +1030,52 @@ mod tests {
 
         let result = read_dbf(&bytes);
         assert!(matches!(result, Err(ShapefileError::InvalidFieldType(b'X'))));
+    }
+
+    #[test]
+    fn windows_1252_maps_the_high_range_to_its_code_points() {
+        // 0x80 is the euro sign, 0x93 and 0x94 are curly quotes, 0xE9 is é in all three.
+        let bytes = [0x80, b'A', 0x93, 0xE9, 0x94];
+        assert_eq!(DbfEncoding::Windows1252.decode(&bytes), "\u{20AC}A\u{201C}\u{e9}\u{201D}");
+        assert_eq!(DbfEncoding::Latin1.decode(&[0xE9]), "\u{e9}");
+        assert_eq!(DbfEncoding::Latin1.decode(&[0x80]), "\u{0080}");
+    }
+
+    #[test]
+    fn utf8_decoding_is_lossy_not_fatal() {
+        assert_eq!(DbfEncoding::Utf8.decode("é".as_bytes()), "é");
+        assert_eq!(DbfEncoding::Utf8.decode(&[0xFF, b'a']), "\u{FFFD}a");
+    }
+
+    #[test]
+    fn cpg_names_map_to_encodings() {
+        assert_eq!(encoding_from_cpg("UTF-8\r\n"), Some(DbfEncoding::Utf8));
+        assert_eq!(encoding_from_cpg("ISO-8859-1"), Some(DbfEncoding::Latin1));
+        assert_eq!(encoding_from_cpg("cp1252"), Some(DbfEncoding::Windows1252));
+        assert_eq!(encoding_from_cpg("EBCDIC"), None);
+    }
+
+    /// A null shape keeps its place, so the record count matches the `.dbf` rows.
+    #[test]
+    fn read_shp_records_keeps_null_shapes_in_place() {
+        let mut bytes = shp_header(1);
+        let mut point = Vec::new();
+        point.extend_from_slice(&1i32.to_le_bytes());
+        point.extend_from_slice(&1.0f64.to_le_bytes());
+        point.extend_from_slice(&2.0f64.to_le_bytes());
+        push_record(&mut bytes, 1, &0i32.to_le_bytes());
+        push_record(&mut bytes, 2, &point);
+        let records = read_shp_records(&bytes).unwrap();
+        assert_eq!(records, vec![None, Some(Geometry::Point(Point::new(1.0, 2.0)))]);
+        assert_eq!(read_shp(&bytes).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn read_dbf_with_matches_read_dbf_for_ascii() {
+        let bytes = build_dbf();
+        assert_eq!(
+            read_dbf_with(&bytes, DbfEncoding::Windows1252).unwrap(),
+            read_dbf(&bytes).unwrap()
+        );
     }
 }
