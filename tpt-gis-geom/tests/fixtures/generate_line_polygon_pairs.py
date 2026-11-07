@@ -44,8 +44,9 @@ while len(rows) < 500:
         " ".join(f"{x:.1f},{y:.1f}" for x, y in pts),
         str(int(line.intersects(poly))),
         str(int(line.crosses(poly))),
+        str(int(line.within(poly))),
     ]))
 with open(OUT, "w", newline="\n") as f:
-    f.write("# polygon_exterior;line_points;intersects;crosses  (GEOS via shapely)\n")
+    f.write("# polygon_exterior;line_points;intersects;crosses;within  (GEOS via shapely)\n")
     f.write("\n".join(rows) + "\n")
 print("rows", len(rows), "crosses", sum(r.endswith(";1") for r in rows), "intersects", sum(r.split(";")[2] == "1" for r in rows))

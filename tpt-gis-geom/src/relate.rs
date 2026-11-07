@@ -80,14 +80,10 @@ fn crossing_params(a: Point, b: Point, c: Point, d: Point, out: &mut Vec<f64>) {
     }
 }
 
-/// Returns `true` if a line crosses a polygon in the OGC sense: some part of the line lies in
-/// the polygon's interior and some part lies outside the polygon, so the two interiors meet
-/// and neither contains the other. Parts on the boundary do not count either way.
-///
-/// The line is split where it meets the boundary, and each piece is classified by its
-/// midpoint. Requires the `alloc` feature.
-#[must_use]
-pub fn line_crosses_polygon(line: &LineString, poly: &Polygon) -> bool {
+/// Classifies the parts of a line against a polygon: `(some part strictly inside, some part
+/// strictly outside)`. The line is split where it meets the boundary, and each piece is
+/// classified by its midpoint. Parts on the boundary are neither.
+fn classify_line_parts(line: &LineString, poly: &Polygon) -> (bool, bool) {
     let mut cuts: Vec<f64> = Vec::new();
     let (mut inside, mut outside) = (false, false);
     for seg in line.points.windows(2) {
@@ -114,11 +110,32 @@ pub fn line_crosses_polygon(line: &LineString, poly: &Polygon) -> bool {
                 outside = true;
             }
             if inside && outside {
-                return true;
+                return (true, true);
             }
         }
     }
+    (inside, outside)
+}
+
+/// Returns `true` if a line crosses a polygon in the OGC sense: some part of the line lies in
+/// the polygon's interior and some part lies outside the polygon, so the two interiors meet
+/// and neither contains the other. Parts on the boundary do not count either way.
+///
+/// The line is split where it meets the boundary, and each piece is classified by its
+/// midpoint. Requires the `alloc` feature.
+#[must_use]
+pub fn line_crosses_polygon(line: &LineString, poly: &Polygon) -> bool {
+    let (inside, outside) = classify_line_parts(line, poly);
     inside && outside
+}
+
+/// Returns `true` if a line lies within a polygon in the OGC sense: every part is in the
+/// polygon's closure, and some part is in its interior. A line along the boundary alone is
+/// not within. Requires the `alloc` feature.
+#[must_use]
+pub fn line_within_polygon(line: &LineString, poly: &Polygon) -> bool {
+    let (inside, outside) = classify_line_parts(line, poly);
+    inside && !outside
 }
 
 #[cfg(test)]

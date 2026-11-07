@@ -9,7 +9,7 @@ use std::path::PathBuf;
 
 use tpt_gis_geom::line_string::LineString;
 use tpt_gis_geom::predicates::line_intersects_polygon;
-use tpt_gis_geom::relate::line_crosses_polygon;
+use tpt_gis_geom::relate::{line_crosses_polygon, line_within_polygon};
 use tpt_gis_geom::{Point, Polygon};
 
 fn parse_points(text: &str) -> Vec<Point> {
@@ -37,10 +37,12 @@ fn line_polygon_intersects_and_crosses_agree_with_geos() {
         let line_points = parse_points(f[1]);
         let want_intersects = f[2] == "1";
         let want_crosses = f[3] == "1";
+        let want_within = f[4] == "1";
         let poly = Polygon::new(&exterior, &[]);
         let line = LineString::new(&line_points);
         let got_intersects = line_intersects_polygon(&line, &poly);
         let got_crosses = line_crosses_polygon(&line, &poly);
+        let got_within = line_within_polygon(&line, &poly);
         if got_intersects != want_intersects {
             mismatches.push(format!(
                 "row {}: intersects ours {got_intersects}, GEOS {want_intersects}",
@@ -52,6 +54,10 @@ fn line_polygon_intersects_and_crosses_agree_with_geos() {
                 "row {}: crosses ours {got_crosses}, GEOS {want_crosses}",
                 index + 1
             ));
+        }
+        if got_within != want_within {
+            mismatches
+                .push(format!("row {}: within ours {got_within}, GEOS {want_within}", index + 1));
         }
         checked += 1;
     }
