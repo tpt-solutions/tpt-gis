@@ -482,6 +482,9 @@ the same logic, not real GDAL/QGIS/libtiff output; add third-party fixtures.
       - Done: area, centroid, convex hull, simplify, `is_valid` (basic), segment
         intersection point, within, polygon touches/overlaps (`relate`, not DE-9IM).
       - Open: `crosses`, line-polygon relations, full DE-9IM.
+      - Fixed: `clip` split nearly vertical edges in lexicographic order; a cut could fall
+        before its edge's own endpoint, so union, intersection and difference were wrong
+        for some inputs (union returned nothing). Found by the GEOS differential test.
 - [ ] `buffer` / `union` / `difference` / `intersection`
       - Decision (recommended option, followed): Martinez–Rueda–Feito sweep.
       - Done: `union`, `intersection`, `difference`, `symmetric_difference`
@@ -526,7 +529,16 @@ the same logic, not real GDAL/QGIS/libtiff output; add third-party fixtures.
 - [ ] Browser/WASM playground (GitHub Pages): load GeoJSON, reproject, join client-side
 - [x] `tptgis validate` / `doctor` for COG layout, GeoPackage, GeoJSON
 - [ ] `tptgis cog-tiles`: XYZ tile server over HTTP-range COGs
-- [ ] Differential tests against stored GDAL/PROJ/GEOS-generated fixtures
+- [x] Differential tests against stored GDAL/PROJ/GEOS-generated fixtures
+      - GEOS (shapely): `tpt-gis-geom/tests/geos_differential.rs` checks 400 random polygon
+        pairs (touching, nested, holed) for area, centroid, hull, intersects, covers,
+        touches, overlaps, and intersection, union and difference areas. The clip checks
+        found a real bug (see the clip item below), now fixed.
+      - PROJ (rasterio): `tpt-gis-core/tests/proj_differential.rs` checks 500 points for UTM
+        (north and south), Lambert-93, Conus Albers and Web Mercator. Max errors: UTM about
+        1 mm, Lambert-93 and Albers about 7 µm, Web Mercator about 34 µm.
+      - GDAL: the GeoTIFF and GeoPackage fixtures above.
+      - Generators are in the `tests/fixtures/` folders next to the data.
 
 ### 4.6 CLI & Python usability
 - [ ] CLI subcommands: `info`, `convert` (GeoJSON/WKT/WKB/SHP/GPKG), raster/COG info;
