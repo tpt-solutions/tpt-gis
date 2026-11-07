@@ -57,7 +57,7 @@ println!("distance = {:.1} m", result.distance_m);
 println!("initial bearing = {:.1}°", result.initial_bearing_deg);
 
 // The direct problem: where do I end up 100 km away on a bearing of 45°?
-let dest = geodesic::direct(&Ellipsoid::WGS84, melbourne, 45.0, 100_000.0);
+let dest = geodesic::direct(&Ellipsoid::WGS84, melbourne, 45.0, 100_000.0).unwrap();
 println!("destination = ({:.4}, {:.4})", dest.destination.lat_deg, dest.destination.lon_deg);
 ```
 

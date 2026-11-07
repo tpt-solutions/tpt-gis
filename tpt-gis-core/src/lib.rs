@@ -1,8 +1,8 @@
 //! `tpt-gis-core`: coordinate reference systems, datum transformations, and geodesic math.
 //!
-//! `no_std` by default (uses [`libm`] for floating-point transcendental functions so it
-//! runs without the Rust standard library). Enable the `std` feature to opt into the
-//! platform's native math intrinsics instead.
+//! `no_std` by default. Floating-point transcendental functions always come from
+//! [`libm`], with or without the `std` feature; `std` only removes the `no_std`
+//! attribute and links the standard library.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 #![warn(missing_docs)]

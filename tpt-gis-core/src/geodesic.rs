@@ -13,9 +13,13 @@ use crate::{Ellipsoid, GeoPoint};
 /// Errors produced by geodesic calculations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GeodesicError {
-    /// Vincenty's inverse iteration did not converge within the iteration limit.
-    /// This occurs only for a small set of nearly-antipodal point pairs.
+    /// Vincenty's iteration did not converge within the iteration limit.
+    /// For the inverse problem this occurs only for a small set of nearly-antipodal
+    /// point pairs.
     ConvergenceFailure,
+    /// An input (coordinate, bearing, or distance) was NaN or infinite, or a latitude
+    /// was outside `[-90, 90]` degrees.
+    InvalidInput,
 }
 
 /// Result of the geodesic inverse problem: the distance and bearings between two points.
@@ -53,13 +57,21 @@ fn normalize_bearing_deg(bearing_rad: f64) -> f64 {
 /// initial/final bearings along the shortest path (geodesic) between them on `ellipsoid`.
 ///
 /// # Errors
-/// Returns [`GeodesicError::ConvergenceFailure`] if the iteration does not converge
-/// within 200 iterations (only expected for nearly-antipodal point pairs).
+/// Returns [`GeodesicError::InvalidInput`] if a coordinate is non-finite or a latitude
+/// is outside `[-90, 90]`, and [`GeodesicError::ConvergenceFailure`] if the iteration
+/// does not converge within 200 iterations (only expected for nearly-antipodal pairs).
 pub fn inverse(
     ellipsoid: &Ellipsoid,
     p1: GeoPoint,
     p2: GeoPoint,
 ) -> Result<InverseResult, GeodesicError> {
+    let valid = |p: GeoPoint| {
+        p.lat_deg.is_finite() && p.lon_deg.is_finite() && (-90.0..=90.0).contains(&p.lat_deg)
+    };
+    if !valid(p1) || !valid(p2) {
+        return Err(GeodesicError::InvalidInput);
+    }
+
     if (p1.lat_deg - p2.lat_deg).abs() < 1e-15 && (p1.lon_deg - p2.lon_deg).abs() < 1e-15 {
         return Ok(InverseResult {
             distance_m: 0.0,
@@ -166,13 +178,27 @@ pub fn inverse(
 
 /// Solves the geodesic direct problem: given a start point, initial bearing, and
 /// distance, finds the destination point and the bearing on arrival, on `ellipsoid`.
-#[must_use]
+///
+/// The destination longitude is normalised to `[-180, 180)` degrees.
+///
+/// # Errors
+/// Returns [`GeodesicError::InvalidInput`] if any input is NaN or infinite, or if the
+/// start latitude is outside `[-90, 90]`. Returns [`GeodesicError::ConvergenceFailure`]
+/// if the sigma iteration does not settle within the iteration limit.
 pub fn direct(
     ellipsoid: &Ellipsoid,
     start: GeoPoint,
     initial_bearing_deg: f64,
     distance_m: f64,
-) -> DirectResult {
+) -> Result<DirectResult, GeodesicError> {
+    let finite = start.lat_deg.is_finite()
+        && start.lon_deg.is_finite()
+        && initial_bearing_deg.is_finite()
+        && distance_m.is_finite();
+    if !finite || !(-90.0..=90.0).contains(&start.lat_deg) {
+        return Err(GeodesicError::InvalidInput);
+    }
+
     let a = ellipsoid.semi_major_axis;
     let f = ellipsoid.flattening;
     let b = ellipsoid.semi_minor_axis();
@@ -190,8 +216,10 @@ pub fn direct(
     let big_a = 1.0 + u_sq / 16384.0 * (4096.0 + u_sq * (-768.0 + u_sq * (320.0 - 175.0 * u_sq)));
     let big_b = u_sq / 1024.0 * (256.0 + u_sq * (-128.0 + u_sq * (74.0 - 47.0 * u_sq)));
 
-    let mut sigma = distance_m / (b * big_a);
+    let base_sigma = distance_m / (b * big_a);
+    let mut sigma = base_sigma;
     let mut cos2_sigma_m;
+    let mut iterations = 0u32;
     loop {
         cos2_sigma_m = cos(2.0 * sigma1 + sigma);
         let sin_sigma = sin(sigma);
@@ -206,9 +234,16 @@ pub fn direct(
                             * (-3.0 + 4.0 * sin_sigma * sin_sigma)
                             * (-3.0 + 4.0 * cos2_sigma_m * cos2_sigma_m)));
         let sigma_prev = sigma;
-        sigma = distance_m / (b * big_a) + delta_sigma;
+        sigma = base_sigma + delta_sigma;
+        iterations += 1;
+        if !sigma.is_finite() {
+            return Err(GeodesicError::ConvergenceFailure);
+        }
         if (sigma - sigma_prev).abs() < CONVERGENCE_THRESHOLD {
             break;
+        }
+        if iterations >= MAX_ITERATIONS {
+            return Err(GeodesicError::ConvergenceFailure);
         }
     }
 
@@ -237,10 +272,16 @@ pub fn direct(
     let lon2 = start.lon_rad() + l;
     let alpha2 = atan2(sin_alpha, -sin_u1 * sin_sigma + cos_u1 * cos_sigma * cos_alpha1);
 
-    DirectResult {
-        destination: GeoPoint::new(lat2.to_degrees(), lon2.to_degrees()),
+    Ok(DirectResult {
+        destination: GeoPoint::new(lat2.to_degrees(), normalize_longitude_deg(lon2.to_degrees())),
         final_bearing_deg: normalize_bearing_deg(alpha2),
-    }
+    })
+}
+
+/// Wraps a longitude in degrees into `[-180, 180)`.
+fn normalize_longitude_deg(lon_deg: f64) -> f64 {
+    // `%` on f64 is a core operator (no `std`), unlike `rem_euclid`.
+    ((((lon_deg + 180.0) % 360.0) + 360.0) % 360.0) - 180.0
 }
 
 #[cfg(test)]
@@ -298,11 +339,48 @@ mod tests {
         let bearing = 306.868_158;
         let distance = 54_972.271;
 
-        let result = direct(&Ellipsoid::WGS84, start, bearing, distance);
+        let result = direct(&Ellipsoid::WGS84, start, bearing, distance).unwrap();
 
         // Buninyong, approximately.
         assert!((result.destination.lat_deg - (-37.652_821)).abs() < 1e-4);
         assert!((result.destination.lon_deg - 143.926_495).abs() < 1e-4);
+    }
+
+    #[test]
+    fn inverse_rejects_non_finite_input() {
+        let e = &Ellipsoid::WGS84;
+        let ok = GeoPoint::new(10.0, 20.0);
+        assert_eq!(inverse(e, GeoPoint::new(f64::NAN, 0.0), ok), Err(GeodesicError::InvalidInput));
+        assert_eq!(
+            inverse(e, ok, GeoPoint::new(0.0, f64::INFINITY)),
+            Err(GeodesicError::InvalidInput)
+        );
+        assert_eq!(inverse(e, ok, GeoPoint::new(91.0, 0.0)), Err(GeodesicError::InvalidInput));
+    }
+
+    #[test]
+    fn direct_rejects_non_finite_input_without_looping() {
+        let start = GeoPoint::new(10.0, 20.0);
+        let e = &Ellipsoid::WGS84;
+        assert_eq!(direct(e, start, f64::NAN, 1000.0), Err(GeodesicError::InvalidInput));
+        assert_eq!(direct(e, start, 45.0, f64::INFINITY), Err(GeodesicError::InvalidInput));
+        assert_eq!(
+            direct(e, GeoPoint::new(f64::NAN, 0.0), 45.0, 1000.0),
+            Err(GeodesicError::InvalidInput)
+        );
+        assert_eq!(
+            direct(e, GeoPoint::new(95.0, 0.0), 45.0, 1000.0),
+            Err(GeodesicError::InvalidInput)
+        );
+    }
+
+    #[test]
+    fn direct_normalises_destination_longitude() {
+        // Heading due east across the antimeridian must not return a longitude > 180.
+        let start = GeoPoint::new(0.0, 179.9);
+        let dest = direct(&Ellipsoid::WGS84, start, 90.0, 200_000.0).unwrap().destination;
+        assert!(dest.lon_deg >= -180.0 && dest.lon_deg < 180.0, "lon {}", dest.lon_deg);
+        assert!(dest.lon_deg < -178.0, "lon {}", dest.lon_deg);
     }
 
     #[test]

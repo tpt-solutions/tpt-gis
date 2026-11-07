@@ -59,12 +59,19 @@ pub fn geocentric_to_geodetic(ellipsoid: &Ellipsoid, geocentric: Geocentric) -> 
     let p = sqrt(geocentric.x * geocentric.x + geocentric.y * geocentric.y);
     let lambda = atan2(geocentric.y, geocentric.x);
 
+    // Height is computed as `p·cosφ + z·sinφ − a·√(1 − e²sin²φ)`, which is finite at
+    // the poles. The more familiar `p / cosφ − N` divides by zero there (and makes
+    // the latitude update's `n + h` vanish, giving NaN).
     let mut phi = atan2(geocentric.z, p * (1.0 - e2));
     for _ in 0..10 {
         let sin_phi = sin(phi);
         let n = a / sqrt(1.0 - e2 * sin_phi * sin_phi);
-        let h = p / cos(phi) - n;
-        let phi_new = atan2(geocentric.z, p * (1.0 - e2 * n / (n + h)));
+        let h = p * cos(phi) + geocentric.z * sin_phi - a * sqrt(1.0 - e2 * sin_phi * sin_phi);
+        let denom = n + h;
+        if denom == 0.0 || !denom.is_finite() {
+            break;
+        }
+        let phi_new = atan2(geocentric.z, p * (1.0 - e2 * n / denom));
         if (phi_new - phi).abs() < 1e-13 {
             phi = phi_new;
             break;
@@ -73,8 +80,7 @@ pub fn geocentric_to_geodetic(ellipsoid: &Ellipsoid, geocentric: Geocentric) -> 
     }
 
     let sin_phi = sin(phi);
-    let n = a / sqrt(1.0 - e2 * sin_phi * sin_phi);
-    let height_m = p / cos(phi) - n;
+    let height_m = p * cos(phi) + geocentric.z * sin_phi - a * sqrt(1.0 - e2 * sin_phi * sin_phi);
 
     (GeoPoint::new(phi.to_degrees(), lambda.to_degrees()), height_m)
 }
@@ -156,6 +162,35 @@ mod tests {
         assert!((recovered.lat_deg - original.lat_deg).abs() < 1e-9);
         assert!((recovered.lon_deg - original.lon_deg).abs() < 1e-9);
         assert!((recovered_height - height).abs() < 1e-6);
+    }
+
+    /// Near and at the poles, `p / cos(phi)` is ill-conditioned, so the height must
+    /// come from a formula that stays finite there.
+    #[test]
+    fn geocentric_round_trip_is_stable_at_the_poles() {
+        let ell = Ellipsoid::WGS84;
+        let b = ell.semi_minor_axis();
+        for &(lat, lon, height) in &[
+            (90.0, 0.0, 100.0),
+            (-90.0, 45.0, 250.0),
+            (89.999_999_9, 10.0, 50.0),
+            (-89.999_999_9, -170.0, 0.0),
+        ] {
+            let geocentric = geodetic_to_geocentric(&ell, GeoPoint::new(lat, lon), height);
+            let (recovered, recovered_height) = geocentric_to_geodetic(&ell, geocentric);
+            assert!(recovered_height.is_finite(), "lat {lat}: height {recovered_height}");
+            assert!(
+                (recovered.lat_deg - lat).abs() < 1e-7,
+                "lat {lat} recovered as {}",
+                recovered.lat_deg
+            );
+            assert!((recovered_height - height).abs() < 1e-3, "lat {lat}: {recovered_height}");
+        }
+        // The exact north pole at height h sits at z = b + h, p = 0.
+        let pole = Geocentric::new(0.0, 0.0, b + 100.0);
+        let (north, h) = geocentric_to_geodetic(&ell, pole);
+        assert!((north.lat_deg - 90.0).abs() < 1e-9, "north lat {} h {h}", north.lat_deg);
+        assert!((h - 100.0).abs() < 1e-6, "height {h}");
     }
 
     #[test]

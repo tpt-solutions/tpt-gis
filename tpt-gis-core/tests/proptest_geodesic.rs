@@ -81,7 +81,8 @@ proptest! {
         let p2 = GeoPoint::new(lat2, lon2);
         let inverse = geodesic::inverse(&Ellipsoid::WGS84, p1, p2);
         if let Ok(inv) = inverse {
-            let direct = geodesic::direct(&Ellipsoid::WGS84, p1, inv.initial_bearing_deg, inv.distance_m);
+            let direct = geodesic::direct(&Ellipsoid::WGS84, p1, inv.initial_bearing_deg, inv.distance_m)
+                .expect("direct must succeed for finite inverse output");
             let dest = direct.destination;
             let dlat = (dest.lat_deg - p2.lat_deg).abs();
             let mut dlon = (dest.lon_deg - p2.lon_deg).abs();

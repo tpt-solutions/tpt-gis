@@ -17,12 +17,10 @@ workspace = true
 
 [dependencies]
 libm = { version = "0.2", default-features = false }
-serde = { version = "1", default-features = false, features = ["derive"], optional = true }
 
 [features]
 default = []
 std = []
-serde = ["dep:serde"]
 
 [package.metadata.docs.rs]
 all-features = true
