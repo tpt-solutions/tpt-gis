@@ -189,3 +189,40 @@ fn unknown_format_name_is_rejected_by_the_parser() {
     ]))
     .is_err());
 }
+
+#[test]
+fn validate_accepts_a_valid_polygon() {
+    let dir = scratch("validate-ok");
+    let input = dir.join("square.geojson");
+    fs::write(
+        &input,
+        r#"{"type":"FeatureCollection","features":[{"type":"Feature","properties":{},
+            "geometry":{"type":"Polygon","coordinates":[[[0,0],[1,0],[1,1],[0,1],[0,0]]]}}]}"#,
+    )
+    .unwrap();
+    run_with_args(args(&["validate", &path_str(&input)])).expect("valid file passes");
+}
+
+/// A bow-tie ring crosses itself; validate must report it and exit with an error.
+#[test]
+fn validate_reports_a_self_intersecting_polygon() {
+    let dir = scratch("validate-bad");
+    let input = dir.join("bowtie.geojson");
+    fs::write(
+        &input,
+        r#"{"type":"FeatureCollection","features":[{"type":"Feature","properties":{},
+            "geometry":{"type":"Polygon","coordinates":[[[0,0],[4,4],[4,0],[0,4],[0,0]]]}}]}"#,
+    )
+    .unwrap();
+    let err = run_with_args(args(&["validate", &path_str(&input)])).unwrap_err();
+    assert!(err.contains("1 problem"), "{err}");
+}
+
+#[test]
+fn validate_reports_unreadable_tiff() {
+    let dir = scratch("validate-tif");
+    let input = dir.join("bogus.tif");
+    fs::write(&input, b"definitely not a tiff").unwrap();
+    let err = run_with_args(args(&["validate", &path_str(&input)])).unwrap_err();
+    assert!(err.contains("problem"), "{err}");
+}

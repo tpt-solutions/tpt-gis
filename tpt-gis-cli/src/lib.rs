@@ -26,6 +26,7 @@ mod convert;
 mod csv;
 mod geofence;
 pub mod rng;
+mod validate;
 use crate::rng::SmallRng;
 
 type Payload = Map<String, Value>;
@@ -110,6 +111,12 @@ enum Commands {
         /// Input file.
         input: String,
     },
+    /// Check a vector or GeoTIFF file. Prints a JSON report; exits with an error if any
+    /// problem is found.
+    Validate {
+        /// File to check (.geojson, .json, .wkt, .wkb, .shp, .gpkg, .tif, .tiff).
+        input: String,
+    },
     /// Compile GeoJSON polygons into a `no_std`-friendly Rust module of const data
     /// (bounding boxes, exterior rings, and holes) for embedded geofence checks.
     GeofenceCompile {
@@ -186,6 +193,7 @@ where
         }
         Commands::Convert { input, output, from, to } => run_convert(input, output, from, to),
         Commands::Info { input } => run_info(input),
+        Commands::Validate { input } => run_validate(&input),
         Commands::GeofenceCompile { input, output } => run_geofence_compile(input, output),
     }
 }
@@ -263,6 +271,21 @@ fn run_geofence_compile(input: String, output: Option<String>) -> Result<(), Str
             std::fs::write(path, source).map_err(|e| format!("failed to write {path}: {e}"))
         }
         _ => write_stdout(&source),
+    }
+}
+
+fn run_validate(input: &str) -> Result<(), String> {
+    let (report, problems) = validate::validate_file(input)?;
+    let text =
+        serde_json::to_string_pretty(&report).map_err(|e| format!("failed to render JSON: {e}"))?;
+    write_stdout(&format!(
+        "{text}
+"
+    ))?;
+    if problems.is_empty() {
+        Ok(())
+    } else {
+        Err(format!("{} problem(s) found in {input}", problems.len()))
     }
 }
 
