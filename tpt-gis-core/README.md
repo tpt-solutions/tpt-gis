@@ -31,7 +31,7 @@ cargo add tpt-gis-core
 
 - **`ellipsoid`** — `Ellipsoid` reference models (`WGS84`, `GRS80`) and their
   semi-axis / eccentricity parameters.
-- **`geodesic`** — Vincenty inverse (distance + initial/final bearing) and direct
+- **`geodesic`** — Karney inverse (distance + initial/final bearing) and direct
   (destination from start, bearing, distance) on an ellipsoid.
 - **`projection`**
   - `web_mercator` — WGS84 ↔ Web Mercator (EPSG:3857), in meters.

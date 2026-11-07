@@ -7,6 +7,8 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 #![warn(missing_docs)]
 
+mod float_ext;
+
 pub mod crs;
 pub mod datum;
 pub mod ellipsoid;

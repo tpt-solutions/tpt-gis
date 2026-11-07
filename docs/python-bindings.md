@@ -64,8 +64,8 @@ dest = gis.geodesic_destination(london, result.initial_bearing_deg, result.dista
 ```
 
 All three functions take an optional `ellipsoid="wgs84"` (or `"grs80"`) keyword
-argument; WGS84 is the default. The underlying math is Vincenty's inverse/direct
-solution on the reference ellipsoid.
+argument; WGS84 is the default. The underlying math is Karney's inverse/direct
+solution (a port of GeographicLib) on the reference ellipsoid.
 
 ### Shapefile reading
 

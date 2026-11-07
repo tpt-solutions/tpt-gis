@@ -11,7 +11,7 @@ v0.1 scope:
 - **Shapefile reading** — `read_shapefile_geometry` (`.shp`) and
   `read_shapefile_attributes` (`.dbf`).
 - **Geodesy** — `GeoPoint` and geodesic distance / inverse / destination on the WGS84
-  and GRS80 ellipsoids (Vincenty's formulae).
+  and GRS80 ellipsoids (Karney's algorithm).
 
 Deferred (not in v0.1): raster/COG, the index crate, GeoPackage, projections, and numpy
 interop.

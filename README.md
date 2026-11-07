@@ -56,7 +56,7 @@ Then use any of the engine crates behind feature flags. Most users only need the
 use tpt_gis::core::{geodesic, Ellipsoid, GeoPoint};
 use tpt_gis::geom::{Point, Polygon};
 
-// Geodesic distance between two places on the WGS84 ellipsoid (Vincenty).
+// Geodesic distance between two places on the WGS84 ellipsoid (Karney).
 let london = GeoPoint::new(51.5074, -0.1278);
 let paris = GeoPoint::new(48.8566, 2.3522);
 let km = geodesic::inverse(&Ellipsoid::WGS84, london, paris).unwrap().distance_m / 1000.0;

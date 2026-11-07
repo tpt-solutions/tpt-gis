@@ -95,7 +95,7 @@ println!("{:.4}, {:.4}", dest.destination.lat_deg, dest.destination.lon_deg);
 ```
 
 Both functions return `GeodesicError::InvalidInput` for non-finite or out-of-range
-input, and `ConvergenceFailure` for nearly antipodal points (Vincenty's method).
+input. Nearly antipodal points are solved (Karney's method converges for every pair).
 
 ## Convex hull and polygon checks
 

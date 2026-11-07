@@ -40,9 +40,9 @@ Source design doc: `spec.txt`.
 - [x] EPSG code registry / lookup (small curated set — WGS84, Web Mercator, all UTM
       zones computed formulaically; **not** the full EPSG database, see `epsg.rs`)
 - [x] Ellipsoid models (WGS84, GRS80)
-- [x] Geodesic distance & bearing calculations (Vincenty; Karney not implemented —
-      Vincenty is sufficient for the accuracy target and fails to converge only for
-      a small set of near-antipodal points, see `geodesic.rs`)
+- [x] Geodesic distance & bearing calculations (Karney's algorithm, a port of
+      GeographicLib; converges for every pair, including nearly antipodal ones; checked
+      against GeographicLib on 613 problems. Vincenty was replaced.)
 - [x] WGS84 ↔ Web Mercator transform
 - [x] WGS84 ↔ UTM transform (state-plane not implemented)
 - [x] Datum transformation pipeline (geodetic↔geocentric conversion + Helmert
@@ -498,7 +498,8 @@ the same logic, not real GDAL/QGIS/libtiff output; add third-party fixtures.
       - Done: LCC (with Lambert-93), Albers, generic Transverse Mercator (UTM is a
         special case), Web Mercator longitude wrapping.
       - Open: EPSG registry entries, BNG (needs the OSTN15 grid), general transform.
-- [ ] Karney geodesics (fixes Vincenty antipodal failure), geodesic area/line sampling
+- [x] Karney geodesics (fixes Vincenty antipodal failure) — inverse and direct, checked
+      against GeographicLib; not done: geodesic area (`S12`) and line sampling
 - [ ] I/O: ISO WKB Z/M + EWKB; WKT `EMPTY`/`Z`/`SRID=`; bare GeoJSON Feature/Geometry,
       `properties: null`; shapefile `.prj`/`.cpg`/Z types + writer; GeoPackage
       WITHOUT ROWID + R-tree tables

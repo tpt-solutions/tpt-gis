@@ -13,7 +13,7 @@ fn main() {
     let melbourne = GeoPoint::new(-37.8136, 144.9631);
     let sydney = GeoPoint::new(-33.8688, 151.2093);
 
-    // Geodesic distance + bearing on the WGS84 ellipsoid (Vincenty's inverse).
+    // Geodesic distance + bearing on the WGS84 ellipsoid (Karney's inverse).
     let result = geodesic::inverse(&Ellipsoid::WGS84, melbourne, sydney).unwrap();
     println!(
         "Melbourne -> Sydney: {:.1} m, initial bearing {:.1} deg",

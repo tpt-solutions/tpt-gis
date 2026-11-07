@@ -81,7 +81,7 @@ comment and explicit discussion in an issue (see `CONTRIBUTING.md`).
 (`Wgs84`, `WebMercator`, `Utm(Zone)`) rather than a general EPSG-code-driven system —
 `epsg.rs` documents how this is expected to grow. `Ellipsoid` (`ellipsoid.rs`) provides
 `WGS84`/`GRS80` as associated consts built from `(semi_major_axis, inverse_flattening)`.
-`geodesic.rs` implements Vincenty's inverse/direct formulae; `projection/utm.rs` and
+`geodesic.rs` implements Karney's inverse/direct algorithm (a GeographicLib port); `projection/utm.rs` and
 `projection/web_mercator.rs` implement forward/inverse projections. Types compose:
 projections and geodesics take `&Ellipsoid` and operate on `GeoPoint`/`PlanarPoint`
 from the crate root.
