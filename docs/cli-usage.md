@@ -61,7 +61,10 @@ Formats are inferred from extensions, or set with `--from` and `--to`:
 - Writing a shapefile needs an `--output` name ending in `.shp`. The `.shx`, `.dbf`, and `.cpg`
   files are written beside it. A shapefile holds one shape type, so mixed geometry types are
   an error. Property names are at most 10 characters, text fields at most 254 bytes, and
-  numbers are written as integers only when every value is one. No `.prj` is written.
+  numbers are written as integers only when every value is one. A `.prj` is written when the
+  projection is known: WGS84 for GeoJSON input (RFC 7946), and a copy of the source
+  shapefile's `.prj` for shapefile input. Reprojected GeoJSON is not tracked, so its `.prj`
+  would be WGS84 too; rewrite it by hand if that is wrong.
 - Without `--output`, the result goes to standard output as GeoJSON unless `--to` is set.
 - A shapefile's sibling `.dbf` supplies each feature's properties, paired by row. The sibling
   `.cpg` names the text encoding (UTF-8, ISO 8859-1, or Windows-1252). Deleted rows are

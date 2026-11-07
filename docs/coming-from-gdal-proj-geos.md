@@ -11,7 +11,7 @@ about the code in this repository, not a release.
 
 | Operation | GDAL / OGR | tpt-gis | Status |
 |-----------|------------|---------|--------|
-| Convert between formats | `ogr2ogr` | `tptgis convert` | 🟡 GeoJSON, WKT, WKB, GeoPackage, and Shapefile read and write; no `.prj` written |
+| Convert between formats | `ogr2ogr` | `tptgis convert` | 🟡 GeoJSON, WKT, WKB, GeoPackage, and Shapefile read and write; `.prj` for GeoJSON (WGS84) and shapefile input |
 | Shapefile attributes | `.dbf` via OGR | `tptgis convert`, `tpt_gis_io::shapefile::read_dbf_with` | ✅ `.cpg` encodings (UTF-8, Latin-1, Windows-1252) |
 | Summary of a dataset | `ogrinfo -so` | `tptgis info` | ✅ counts, types, bounds, property names |
 | Vector reprojection | `ogr2ogr -t_srs` | `tptgis reproject` | 🟡 from WGS84 to Web Mercator or UTM only |
@@ -50,7 +50,7 @@ about the code in this repository, not a release.
 | `convex_hull` | `convex_hull` | `convex_hull` | ✅ allocation-free |
 | `simplify` | `simplify` | `simplify::simplify_into` (Douglas-Peucker) | ✅ |
 | `is_valid` | `is_valid` | `Polygon::is_valid` | 🟡 rings, self-intersection, holes inside the exterior |
-| `buffer` | `buffer` | `buffer::buffer_point`, `buffer_line`, `buffer_polygon` (`alloc`) | 🟡 round joins; holes shrink; no erosion (negative distances) |
+| `buffer` | `buffer` | `buffer::buffer_point`, `buffer_line`, `buffer_polygon` (`alloc`) | ✅ round joins; holes shrink; negative distances erode |
 | `union`, `intersection`, `difference`, `symmetric_difference` | same | `clip::union` and friends (`alloc`) | ✅ Martinez–Rueda–Feito sweep; holes and coincident edges handled |
 | Multi-part geometries | `Multi*` | `MultiPoint`, `MultiLineString`, `MultiPolygon`, `GeometryRef` | ✅ borrowed, zero-allocation |
 | Nearest feature | `nearest_points`, sjoin nearest | `RTree::nearest`, `spatial_join::nearest_polygon_join` | ✅ |

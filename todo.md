@@ -463,7 +463,8 @@ the same logic, not real GDAL/QGIS/libtiff output; add third-party fixtures.
       - Done: `union`, `intersection`, `difference`, `symmetric_difference`
         (`clip`, `alloc` feature), tested against a point-membership oracle.
       - Done since: buffers of polygons with holes (holes shrink).
-      - Open: buffer erosion (negative distances); a balanced-tree merge for buffers
+      - Done since: erosion (negative distances) is polygon minus the boundary buffer.
+      - Open: a balanced-tree merge for buffers
         of very large inputs.
 - [ ] CRS: Lambert Conformal Conic, Albers, generic Transverse Mercator, NAD83 /
       ETRS89 / BNG / Lambert-93 registry entries, general `transform(from, to)`
@@ -482,7 +483,8 @@ the same logic, not real GDAL/QGIS/libtiff output; add third-party fixtures.
         `validate`.
       - Also done: a shapefile writer (`.shp`, `.shx`, `.dbf`, `.cpg`), checked by GDAL
         (read through pyogrio).
-      - Open: WKT `EMPTY` (the model has no empty geometries), `.prj` output, GeoPackage
+      - Also done: `.prj` for shapefiles written from GeoJSON (WGS84) or shapefiles.
+      - Open: WKT `EMPTY` (the model has no empty geometries), GeoPackage
         WITHOUT ROWID and R-tree tables.
 - [ ] Raster: multi-band, ZSTD, overview IFDs, GeoTIFF/COG writer
       - Done: PixelIsPoint georeferencing (the origin moves half a pixel); ZSTD decoding
