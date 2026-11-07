@@ -175,7 +175,7 @@ pub fn read_file_features(
         shapefile::read_shp_records(bytes).map_err(|e| format!("invalid shapefile: {e}"))?;
     let shp = Path::new(path);
     let Ok(dbf_bytes) = std::fs::read(shp.with_extension("dbf")) else {
-        return Ok(geometries.into_iter().map(|g| feature(g)).collect());
+        return Ok(geometries.into_iter().map(feature).collect());
     };
     let encoding = std::fs::read_to_string(shp.with_extension("cpg"))
         .ok()
