@@ -48,8 +48,8 @@ pub enum CellValue {
 pub struct Column {
     /// The column's name (as declared in the `CREATE TABLE` statement).
     pub name: String,
-    /// Whether this column is an `INTEGER PRIMARY KEY` rowid alias. Such a column is
-    /// *not* stored in the record body; its value is the cell's rowid.
+    /// Whether this column is an `INTEGER PRIMARY KEY` rowid alias. Its record slot holds
+    /// NULL (serial type 0, no body bytes), and its value is the cell's rowid.
     pub is_rowid_alias: bool,
 }
 
@@ -347,34 +347,34 @@ fn read_record(
     let mut values = Vec::with_capacity(columns.len());
     let mut serial_iter = serial_types.into_iter();
     for column in columns {
-        if column.is_rowid_alias {
-            values.push(CellValue::Integer(rowid));
-            continue;
-        }
-        // A record written before `ALTER TABLE ... ADD COLUMN` has fewer values than the
-        // schema; SQLite reads the missing trailing columns as NULL.
-        let Some(st) = serial_iter.next() else {
-            values.push(CellValue::Null);
-            continue;
+        // Every column, including a rowid alias, has a slot in the header. A record written
+        // before `ALTER TABLE ... ADD COLUMN` has fewer slots than the schema; SQLite reads
+        // the missing trailing columns as NULL.
+        let stored = match serial_iter.next() {
+            Some(st) => {
+                let (value, p) = decode_value(payload, pos, st)?;
+                pos = p;
+                value
+            }
+            None => CellValue::Null,
         };
-        let (value, p) = decode_value(payload, pos, st)?;
-        pos = p;
-        values.push(value);
+        values.push(if column.is_rowid_alias { CellValue::Integer(rowid) } else { stored });
     }
     Ok(values)
 }
 
-/// Assembles a record payload (header + body) for the given stored column values.
+/// Assembles a record payload (header + body) for the given column values.
 ///
-/// `columns` and `values` are aligned and must already exclude any `INTEGER PRIMARY
-/// KEY` alias column (whose value lives in the cell's rowid, not the record).
+/// `columns` and `values` are aligned and include any `INTEGER PRIMARY KEY` alias column.
+/// SQLite stores such a column as a NULL slot, so the alias value passed here is ignored
+/// and written as NULL, and the real value is the cell's rowid.
 #[must_use]
 pub fn encode_record(columns: &[Column], values: &[CellValue]) -> Vec<u8> {
     debug_assert_eq!(columns.len(), values.len());
     let mut header = Vec::new();
     let mut body = Vec::new();
     for (column, value) in columns.iter().zip(values) {
-        debug_assert!(!column.is_rowid_alias, "alias column must not be stored");
+        let value = if column.is_rowid_alias { &CellValue::Null } else { value };
         let (serial, bytes) = serial_for_value(value);
         write_varint(&mut header, serial);
         body.extend_from_slice(&bytes);
@@ -867,14 +867,14 @@ mod tests {
             Column { name: "ratio".into(), is_rowid_alias: false },
             Column { name: "blob".into(), is_rowid_alias: false },
         ];
-        let stored = &columns[1..];
         let values = vec![
+            CellValue::Null, // the rowid alias: a NULL slot in the record
             CellValue::Text("hello".into()),
             CellValue::Integer(42),
             CellValue::Real(3.5),
             CellValue::Blob(vec![1, 2, 3]),
         ];
-        let payload = encode_record(stored, &values);
+        let payload = encode_record(&columns, &values);
         let decoded = read_record(&payload, &columns, 7).unwrap();
         assert_eq!(decoded[0], CellValue::Integer(7)); // alias filled from rowid
         assert_eq!(decoded[1], CellValue::Text("hello".into()));
@@ -1000,5 +1000,26 @@ mod tree_tests {
         let tree = build_table_tree(PAGE, 2, &[]).unwrap();
         let db = image(&tree.pages, tree.last_page);
         assert!(read_back(&db, 2).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod rowid_alias_layout_tests {
+    use super::*;
+
+    /// SQLite gives an `INTEGER PRIMARY KEY` column a NULL slot in the record header
+    /// (serial type 0, no body). A record with `[alias, text "hi"]` is therefore header
+    /// `[3, 0, 17]` followed by the body `"hi"`.
+    #[test]
+    fn rowid_alias_takes_a_null_header_slot() {
+        let columns = [
+            Column { name: "id".into(), is_rowid_alias: true },
+            Column { name: "name".into(), is_rowid_alias: false },
+        ];
+        let values = [CellValue::Null, CellValue::Text("hi".into())];
+        let payload = encode_record(&columns, &values);
+        assert_eq!(payload, vec![3, 0, 17, b'h', b'i']);
+        let decoded = read_record(&payload, &columns, 9).unwrap();
+        assert_eq!(decoded, vec![CellValue::Integer(9), CellValue::Text("hi".into())]);
     }
 }

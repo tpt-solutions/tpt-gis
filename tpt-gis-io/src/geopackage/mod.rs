@@ -2,10 +2,10 @@
 //!
 //! GeoPackage is, per the OGC spec, a SQLite database file. This module reads and
 //! writes it without any C FFI (no `rusqlite`/`libsqlite3-sys`) and with no external
-//! engine — the underlying SQLite file-format logic lives in [`sqlite`], and the
+//! engine — the underlying SQLite file-format logic lives in `sqlite`, and the
 //! geometry BLOB codec (a GeoPackageBinary header wrapping standard WKB) lives in
-//! [`geometry`]. Both are zero-dependency and reuse the crate's existing WKB reader
-//! and the shared [`geometry::Geometry`] type, so output is identical in shape to the
+//! `geometry`. Both are zero-dependency and reuse the crate's existing WKB reader
+//! and the shared [`Geometry`] type, so output is identical in shape to the
 //! GeoJSON / WKT / Shapefile readers.
 //!
 //! The public entry points are [`read_gpkg`] (a `.gpkg` byte slice →
@@ -14,7 +14,7 @@
 //! overflow payloads, and `INTEGER PRIMARY KEY` rowid aliasing. Writing is
 //! limited to tables with one interior level (about 500 leaves) and no R-tree spatial
 //! index or tile/attributes extension. Large records use overflow pages. See the
-//! [`sqlite`] module docs for the exact scope.
+//! `sqlite` module docs for the exact scope.
 //!
 //! # Attribute mapping
 //! `INTEGER`/`REAL` → JSON number, `TEXT` → JSON string, `BOOLEAN` → JSON bool (stored
@@ -202,10 +202,10 @@ pub fn write_gpkg(features: &[Feature], opts: &WriteOptions) -> Result<Vec<u8>, 
         all_cols.push((name.clone(), ty.clone(), false));
     }
 
-    let stored_columns: Vec<Column> = all_cols
+    // Every declared column has a slot in the record, the rowid alias included (as NULL).
+    let record_columns: Vec<Column> = all_cols
         .iter()
-        .filter(|(_, _, alias)| !*alias)
-        .map(|(name, _, _)| Column { name: name.clone(), is_rowid_alias: false })
+        .map(|(name, _, alias)| Column { name: name.clone(), is_rowid_alias: *alias })
         .collect();
 
     // Feature rows.
@@ -220,7 +220,10 @@ pub fn write_gpkg(features: &[Feature], opts: &WriteOptions) -> Result<Vec<u8>, 
             idx as i64 + 1
         };
 
-        let mut vals: Vec<CellValue> = Vec::with_capacity(stored_columns.len());
+        let mut vals: Vec<CellValue> = Vec::with_capacity(record_columns.len());
+        if opts.id_column.is_some() {
+            vals.push(CellValue::Null); // the rowid alias slot
+        }
         match &feature.geometry {
             Some(g) => vals.push(CellValue::Blob(encode_geometry_blob(g, opts.srs_id))),
             None => vals.push(CellValue::Null),
@@ -229,7 +232,7 @@ pub fn write_gpkg(features: &[Feature], opts: &WriteOptions) -> Result<Vec<u8>, 
             let value = feature.properties.get(name).cloned().unwrap_or(Value::Null);
             vals.push(json_to_cell(&value));
         }
-        feature_cells.push((rowid, sqlite::encode_record(&stored_columns, &vals)));
+        feature_cells.push((rowid, sqlite::encode_record(&record_columns, &vals)));
     }
 
     feature_cells.sort_by_key(|(id, _)| *id);

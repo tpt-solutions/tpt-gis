@@ -20,7 +20,7 @@
 //!   containment tests to know which exterior a given hole belongs to. Implementing that
 //!   grouping correctly is a non-trivial algorithm in its own right and easy to get
 //!   subtly wrong under time pressure, so it has been left out of this first pass.
-//!   Instead, [`parse_polygon_record`] treats **ring 0 (file order) as the exterior and
+//!   Instead, `parse_polygon_record` treats **ring 0 (file order) as the exterior and
 //!   every remaining ring as an interior (hole) of a single [`Geometry::Polygon`]**,
 //!   regardless of winding order. This is correct for the overwhelmingly common case of
 //!   one exterior ring plus holes, but will misrepresent a genuinely multi-part polygon
