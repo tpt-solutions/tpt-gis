@@ -62,7 +62,7 @@ they behave the same at micrometre and projected-metre scales.
 
 | Operation | GDAL / rasterio | tpt-gis | Status |
 |-----------|-----------------|---------|--------|
-| Read GeoTIFF | `rasterio.open` | `raster::geotiff::read_file` | 🟡 single band; strips and tiles; deflate, LZW, PackBits; predictors 2 and 3 |
+| Read GeoTIFF | `rasterio.open` | `raster::geotiff::read_file` | 🟡 single band; strips and tiles; deflate, LZW, PackBits, ZSTD; predictors 2 and 3; PixelIsPoint |
 | Validate COG layout | `rio cogeo validate` | `raster::cog::validate` | ✅ |
 | Remote COG windows | `/vsicurl/` | `raster::http::CogRangeReader` (`http` feature) | 🟡 Range requests, custom headers; no retries |
 | Map algebra | `gdal_calc` | `raster::algebra` | ✅ add, subtract, reclassify, focal statistics |

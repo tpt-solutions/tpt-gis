@@ -481,7 +481,9 @@ the same logic, not real GDAL/QGIS/libtiff output; add third-party fixtures.
       - Open: WKT `EMPTY` (the model has no empty geometries), `.cpg` encodings, a
         shapefile writer, GeoPackage WITHOUT ROWID and R-tree tables.
 - [ ] Raster: multi-band, ZSTD, overview IFDs, GeoTIFF/COG writer
-      - Done: PixelIsPoint georeferencing (the origin moves half a pixel).
+      - Done: PixelIsPoint georeferencing (the origin moves half a pixel); ZSTD decoding
+        (`ruzstd`, decode only). Tests cover raw-block frames; real compressed streams are
+        exercised by the decoder's own tests, not by ours.
 - [ ] Index: R-tree remove + k-NN; polygon-polygon and nearest spatial joins;
       H3/S2 polygon covering
       - Done: `RTree::remove`, `RTree::nearest` / `nearest_iter`,
