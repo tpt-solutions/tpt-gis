@@ -5,6 +5,7 @@
 //! equality, so nearly-collinear points and near-touching segments are classified
 //! consistently rather than flipping on rounding noise.
 
+use crate::distance;
 use crate::line_string::LineString;
 use crate::point::Point;
 use crate::polygon::Polygon;
@@ -52,7 +53,11 @@ enum Orientation {
 
 fn orientation(p: Point, q: Point, r: Point) -> Orientation {
     let val = (q.y - p.y) * (r.x - q.x) - (q.x - p.x) * (r.y - q.y);
-    if val.abs() < EPSILON {
+    // Tolerance is relative to the size of the two edge vectors, so that the test
+    // behaves the same at micrometre scale and at projected-metre scale. An absolute
+    // threshold would call every tiny triangle collinear.
+    let scale = ((q.x - p.x).abs() + (q.y - p.y).abs()) * ((r.x - q.x).abs() + (r.y - q.y).abs());
+    if val.abs() <= EPSILON * scale {
         Orientation::Collinear
     } else if val > 0.0 {
         Orientation::Clockwise
@@ -124,13 +129,13 @@ pub fn linestrings_intersect(a: &LineString, b: &LineString) -> bool {
     false
 }
 
-/// Returns `true` if the two polygons' exteriors overlap: their boundaries cross, or
-/// one polygon has a vertex inside the other.
+/// Returns `true` if the two polygons share any point: a boundary edge of one
+/// touches or crosses a boundary edge of the other (exterior or hole rings), or one
+/// polygon has an exterior vertex inside the other's region.
 ///
-/// This covers the common OGC "intersects" cases (boundary crossing and full
-/// containment) but does not attempt exact interior/interior overlap classification
-/// for polygons with no crossing edges and no vertex nested inside the other purely
-/// via boundary/hole interactions — full topological overlay (per DE-9IM) is future work.
+/// Full DE-9IM interior/interior classification is still future work; this covers
+/// boundary contact and nesting, and treats holes correctly via
+/// [`Polygon::contains_point`].
 #[must_use]
 pub fn polygons_intersect(a: &Polygon, b: &Polygon) -> bool {
     match (a.bbox(), b.bbox()) {
@@ -138,26 +143,175 @@ pub fn polygons_intersect(a: &Polygon, b: &Polygon) -> bool {
         _ => {}
     }
 
-    if ring_segments_intersect(a.exterior, b.exterior) {
-        return true;
+    // Boundary contact: every ring (exterior *and* holes) of each polygon is tested.
+    for ring_a in rings(a) {
+        for ring_b in rings(b) {
+            if ring_segments_intersect(ring_a, ring_b) {
+                return true;
+            }
+        }
     }
+
+    // No boundary contact: either disjoint or nested. A nested polygon's exterior
+    // vertices lie strictly inside the other polygon's region.
     if a.exterior.iter().any(|&p| b.contains_point(p)) {
         return true;
     }
-    if b.exterior.iter().any(|&p| a.contains_point(p)) {
-        return true;
-    }
-    false
+    b.exterior.iter().any(|&p| a.contains_point(p))
 }
 
-/// Returns `true` if `outer` fully contains `inner`: every vertex of `inner`'s exterior
-/// lies inside `outer`, and their boundaries do not cross.
+/// Returns `true` if `outer` fully contains `inner` (OGC `contains`): `inner`'s
+/// region is a subset of `outer`'s region.
+///
+/// Boundary contact is allowed. The check is:
+/// 1. every exterior vertex of `inner` lies in or on `outer`;
+/// 2. no edge of `inner` leaves `outer`: each edge is split at every point where it
+///    meets an `outer` ring (including `outer` vertices lying on the edge), and each
+///    sub-segment's midpoint must lie in or on `outer`, so holes in `outer` are
+///    respected;
+/// 3. no hole of `outer` pokes into `inner`'s region.
+///
+/// Rings are assumed simple and closed. Points exactly on the boundary are treated
+/// as covered (OGC-style). If an edge is cut more than [`MAX_CUTS`] times the
+/// function conservatively returns `false`.
 #[must_use]
 pub fn polygon_contains_polygon(outer: &Polygon, inner: &Polygon) -> bool {
-    if ring_segments_intersect(outer.exterior, inner.exterior) {
+    if !inner.exterior.iter().all(|&p| covers_point(outer, p)) {
         return false;
     }
-    inner.exterior.iter().all(|&p| outer.contains_point(p))
+
+    for i in 0..inner.exterior.len() {
+        let (p, q) = ring_edges(inner.exterior, i);
+        let mut cuts = Cuts::new();
+        cuts.push(0.0);
+        cuts.push(1.0);
+        for ring in rings(outer) {
+            for j in 0..ring.len() {
+                let (a, b) = ring_edges(ring, j);
+                if let Some(t) = proper_crossing_param(p, q, a, b) {
+                    if !cuts.push(t) {
+                        return false;
+                    }
+                }
+                if let Some(t) = vertex_param_on_segment(ring[j], p, q) {
+                    if !cuts.push(t) {
+                        return false;
+                    }
+                }
+            }
+        }
+        let sorted = cuts.sorted();
+        for pair in sorted.windows(2) {
+            if pair[1] <= pair[0] {
+                continue;
+            }
+            let mid_t = 0.5 * (pair[0] + pair[1]);
+            let mid = Point::new(p.x + mid_t * (q.x - p.x), p.y + mid_t * (q.y - p.y));
+            if !covers_point(outer, mid) {
+                return false;
+            }
+        }
+    }
+
+    // A hole of `outer` with a vertex strictly inside `inner` means part of `inner`
+    // lies in a region `outer` does not cover.
+    !outer.interiors.iter().any(|hole| hole.iter().any(|&v| strictly_inside(inner, v)))
+}
+
+/// Iterates over a polygon's exterior ring followed by its hole rings.
+fn rings<'a>(poly: &Polygon<'a>) -> impl Iterator<Item = &'a [Point]> + Clone + 'a {
+    core::iter::once(poly.exterior).chain(poly.interiors.iter().copied())
+}
+
+/// `true` if `p` is in `poly`'s closed region: inside, or on any of its rings.
+fn covers_point(poly: &Polygon, p: Point) -> bool {
+    poly.contains_point(p) || on_polygon_boundary(poly, p)
+}
+
+/// `true` if `p` is on the boundary of `poly` (within [`EPSILON`]).
+fn on_polygon_boundary(poly: &Polygon, p: Point) -> bool {
+    rings(poly).any(|ring| {
+        (0..ring.len()).any(|i| {
+            let (a, b) = ring_edges(ring, i);
+            distance::point_to_segment(p, a, b) <= EPSILON
+        })
+    })
+}
+
+/// `true` if `p` is inside `poly`'s region and not on its boundary.
+fn strictly_inside(poly: &Polygon, p: Point) -> bool {
+    poly.contains_point(p) && !on_polygon_boundary(poly, p)
+}
+
+/// The parameter `t` in `(0, 1)` at which segment `p→q` properly crosses segment
+/// `a→b` (interior to both), or `None` if they do not cross there. Endpoint touches
+/// are left to the vertex test.
+fn proper_crossing_param(p: Point, q: Point, a: Point, b: Point) -> Option<f64> {
+    let r = (q.x - p.x, q.y - p.y);
+    let s = (b.x - a.x, b.y - a.y);
+    let denom = r.0 * s.1 - r.1 * s.0;
+    if denom.abs() < f64::EPSILON {
+        return None;
+    }
+    let ap = (a.x - p.x, a.y - p.y);
+    let t = (ap.0 * s.1 - ap.1 * s.0) / denom;
+    let u = (ap.0 * r.1 - ap.1 * r.0) / denom;
+    (t > 0.0 && t < 1.0 && u > 0.0 && u < 1.0).then_some(t)
+}
+
+/// If `v` lies on segment `p→q` strictly between its endpoints (within [`EPSILON`]),
+/// the parameter `t` in `(0, 1)` of that point.
+fn vertex_param_on_segment(v: Point, p: Point, q: Point) -> Option<f64> {
+    let d = (q.x - p.x, q.y - p.y);
+    let len_sq = d.0 * d.0 + d.1 * d.1;
+    if len_sq == 0.0 {
+        return None;
+    }
+    let t = ((v.x - p.x) * d.0 + (v.y - p.y) * d.1) / len_sq;
+    if t <= 0.0 || t >= 1.0 {
+        return None;
+    }
+    (distance::point_to_segment(v, p, q) <= EPSILON).then_some(t)
+}
+
+/// Maximum number of split points tracked along one edge. Exceeding it makes
+/// [`polygon_contains_polygon`] answer `false` rather than allocate.
+const MAX_CUTS: usize = 128;
+
+/// A fixed-capacity, allocation-free buffer of split parameters along one edge, so
+/// the predicates remain usable in `no_std`/`alloc`-free builds.
+struct Cuts {
+    values: [f64; MAX_CUTS],
+    len: usize,
+}
+
+impl Cuts {
+    fn new() -> Self {
+        Self { values: [0.0; MAX_CUTS], len: 0 }
+    }
+
+    /// Adds a parameter; returns `false` if the buffer is full.
+    fn push(&mut self, t: f64) -> bool {
+        if self.len == MAX_CUTS {
+            return false;
+        }
+        self.values[self.len] = t;
+        self.len += 1;
+        true
+    }
+
+    /// Sorts the stored parameters in place (insertion sort; the buffer is small).
+    fn sorted(&mut self) -> &[f64] {
+        let slice = &mut self.values[..self.len];
+        for i in 1..slice.len() {
+            let mut j = i;
+            while j > 0 && slice[j - 1] > slice[j] {
+                slice.swap(j - 1, j);
+                j -= 1;
+            }
+        }
+        &self.values[..self.len]
+    }
 }
 
 #[cfg(test)]
@@ -199,6 +353,19 @@ mod tests {
         assert!(!segments_intersect(p1, q1, p2, q2));
     }
 
+    /// Segments at micrometre scale must still be classified correctly; an absolute
+    /// orientation tolerance made every such triangle look collinear.
+    #[test]
+    fn crossing_segments_are_detected_at_tiny_scale() {
+        let s = 1e-7;
+        assert!(segments_intersect(
+            Point::new(0.0, 0.0),
+            Point::new(4.0 * s, 4.0 * s),
+            Point::new(0.0, 4.0 * s),
+            Point::new(4.0 * s, 0.0),
+        ));
+    }
+
     #[test]
     fn overlapping_squares_intersect() {
         let a = square(0.0, 10.0);
@@ -225,5 +392,65 @@ mod tests {
         let poly_inner = Polygon::from_exterior(&inner);
         assert!(polygon_contains_polygon(&poly_outer, &poly_inner));
         assert!(polygons_intersect(&poly_outer, &poly_inner));
+    }
+
+    /// OGC `contains` permits the inner boundary to touch the outer boundary.
+    #[test]
+    fn contains_allows_shared_boundary() {
+        let outer = square(0.0, 10.0);
+        let inner = square(0.0, 5.0);
+        let poly_outer = Polygon::from_exterior(&outer);
+        let poly_inner = Polygon::from_exterior(&inner);
+        assert!(polygon_contains_polygon(&poly_outer, &poly_inner));
+    }
+
+    /// A polygon sitting in the hole of `outer` is not contained by it.
+    #[test]
+    fn contains_rejects_polygon_inside_hole() {
+        let outer = square(0.0, 10.0);
+        let hole = square(2.0, 8.0);
+        let holes: [&[Point]; 1] = [&hole];
+        let poly_outer = Polygon::new(&outer, &holes);
+        let inner = square(4.0, 6.0);
+        let poly_inner = Polygon::from_exterior(&inner);
+        assert!(!polygon_contains_polygon(&poly_outer, &poly_inner));
+        assert!(!polygons_intersect(&poly_outer, &poly_inner));
+    }
+
+    /// An inner polygon that swallows an outer hole does not fit inside `outer`:
+    /// the hole's region is not part of `outer`.
+    #[test]
+    fn contains_rejects_polygon_that_covers_a_hole() {
+        let outer = square(0.0, 10.0);
+        let hole = square(4.0, 6.0);
+        let holes: [&[Point]; 1] = [&hole];
+        let poly_outer = Polygon::new(&outer, &holes);
+        let inner = square(3.0, 7.0);
+        let poly_inner = Polygon::from_exterior(&inner);
+        assert!(!polygon_contains_polygon(&poly_outer, &poly_inner));
+    }
+
+    /// Containment must hold even when the inner ring's edges cross the outer
+    /// boundary exactly at an outer vertex and continue outward.
+    #[test]
+    fn contains_rejects_edge_leaving_through_outer_vertex() {
+        let outer = [
+            Point::new(0.0, 0.0),
+            Point::new(10.0, 0.0),
+            Point::new(5.0, 5.0),
+            Point::new(0.0, 10.0),
+            Point::new(0.0, 0.0),
+        ];
+        // Vertex (5,5) of `outer` is a notch; this triangle's edge passes through it
+        // and exits to (12, 12), well outside.
+        let inner = [
+            Point::new(1.0, 1.0),
+            Point::new(12.0, 12.0),
+            Point::new(1.0, 2.0),
+            Point::new(1.0, 1.0),
+        ];
+        let poly_outer = Polygon::from_exterior(&outer);
+        let poly_inner = Polygon::from_exterior(&inner);
+        assert!(!polygon_contains_polygon(&poly_outer, &poly_inner));
     }
 }
