@@ -558,6 +558,34 @@ pub fn read_table(
 /// leaf table b-tree cell uses. The records must collectively fit in the page
 /// alongside the header and cell-pointer array — callers (the writer) are responsible
 /// for keeping tables small enough.
+/// Builds a leaf page of an index b-tree (page type `0x0a`). Each record is one index entry:
+/// the indexed columns followed by the rowid. The records must already be in key order.
+///
+/// # Errors
+/// Returns an error if the entries do not fit in one page (the caller would need a deeper
+/// tree, which this writer does not build).
+pub fn build_index_leaf(page_size: usize, records: &[Vec<u8>]) -> Result<Vec<u8>, &'static str> {
+    let mut page = vec![0u8; page_size];
+    page[0] = 0x0a; // leaf index
+    page[3..5].copy_from_slice(&(records.len() as u16).to_be_bytes());
+    let mut start = page_size;
+    let mut ptr = 8usize;
+    for record in records {
+        let mut cell = Vec::with_capacity(9 + record.len());
+        write_varint(&mut cell, record.len() as u64);
+        cell.extend_from_slice(record);
+        if start < ptr + 2 + cell.len() {
+            return Err("index entries do not fit in one page");
+        }
+        start -= cell.len();
+        page[start..start + cell.len()].copy_from_slice(&cell);
+        page[ptr..ptr + 2].copy_from_slice(&(start as u16).to_be_bytes());
+        ptr += 2;
+    }
+    page[5..7].copy_from_slice(&(start as u16).to_be_bytes());
+    Ok(page)
+}
+
 #[must_use]
 pub fn build_leaf_page(
     page_size: usize,

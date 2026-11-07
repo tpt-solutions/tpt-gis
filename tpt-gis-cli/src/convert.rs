@@ -152,6 +152,7 @@ pub fn write_features(format: Format, features: &[Feature]) -> Result<Vec<u8>, S
                 srs_id: 4326,
                 id_column: None,
                 description: None,
+                spatial_index: false,
             };
             write_gpkg(features, &opts).map_err(|e| format!("failed to write GeoPackage: {e}"))
         }

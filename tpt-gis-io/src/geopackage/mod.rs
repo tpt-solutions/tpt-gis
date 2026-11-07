@@ -23,6 +23,7 @@
 //! via [`geometry::encode_geometry_blob`].
 
 mod geometry;
+mod rtree;
 mod sqlite;
 
 pub use geometry::{decode_geometry_blob, encode_geometry_blob, GeoPackageGeometryError};
@@ -103,6 +104,10 @@ pub struct WriteOptions {
     pub id_column: Option<String>,
     /// An optional human-readable description for `gpkg_contents`.
     pub description: Option<String>,
+    /// Whether to write the `gpkg_rtree_index` spatial index on the geometry column: an
+    /// `rtree` virtual table, its three shadow tables, the six maintenance triggers, and the
+    /// `gpkg_extensions` row. Off by default.
+    pub spatial_index: bool,
 }
 
 /// Reads a GeoPackage file into a flat list of [`Feature`]s, one per feature-table row
@@ -210,6 +215,7 @@ pub fn write_gpkg(features: &[Feature], opts: &WriteOptions) -> Result<Vec<u8>, 
 
     // Feature rows.
     let mut feature_cells: Vec<(i64, Vec<u8>)> = Vec::new();
+    let mut index_entries: Vec<(i64, [f32; 4])> = Vec::new();
     for (idx, feature) in features.iter().enumerate() {
         let rowid = if let Some(id) = &opts.id_column {
             match feature.properties.get(id) {
@@ -233,6 +239,11 @@ pub fn write_gpkg(features: &[Feature], opts: &WriteOptions) -> Result<Vec<u8>, 
             vals.push(json_to_cell(&value));
         }
         feature_cells.push((rowid, sqlite::encode_record(&record_columns, &vals)));
+        if opts.spatial_index {
+            if let Some(bounds) = feature.geometry.as_ref().and_then(rtree::geometry_bounds) {
+                index_entries.push((rowid, bounds));
+            }
+        }
     }
 
     feature_cells.sort_by_key(|(id, _)| *id);
@@ -249,10 +260,166 @@ pub fn write_gpkg(features: &[Feature], opts: &WriteOptions) -> Result<Vec<u8>, 
     // table's b-tree (root at page 5, leaves and overflow pages after it).
     let features = sqlite::build_table_tree(PAGE_SIZE, FEATURE_ROOT, &feature_cells)
         .map_err(|_| GeoPackageError::WriteTooLarge)?;
-    let page_count = features.last_page.max(FEATURE_ROOT);
+
+    // Tables after the feature table: with a spatial index, the extensions table and the
+    // index's three shadow tables. Each gets its root page in turn.
+    let mut trees: Vec<sqlite::TablePages> = Vec::new();
+    let mut master_extra: Vec<(&str, String, String, u32, Option<String>)> = Vec::new();
+    let mut next_root = features.last_page + 1;
+    if opts.spatial_index {
+        let index_id = opts.id_column.clone().unwrap_or_else(|| "rowid".to_string());
+        let geometry = &opts.geometry_column;
+        let table = &opts.table_name;
+        let index = rtree::index_name(table, geometry);
+
+        let ext_row = rtree::extension_row(table, geometry);
+        let ext_values: Vec<CellValue> =
+            ext_row.iter().map(|v| CellValue::Text(v.clone())).collect();
+        let ext_cells = vec![(1, sqlite::encode_record(&extensions_columns(), &ext_values))];
+        let ext = sqlite::build_table_tree(PAGE_SIZE, next_root, &ext_cells)
+            .map_err(|_| GeoPackageError::WriteTooLarge)?;
+        master_extra.push((
+            "table",
+            "gpkg_extensions".into(),
+            "gpkg_extensions".into(),
+            next_root,
+            Some(extensions_sql()),
+        ));
+        next_root = ext.last_page + 1;
+        trees.push(ext);
+
+        // The UNIQUE constraint on gpkg_extensions makes SQLite expect an automatic index
+        // with its own b-tree and a sqlite_master row (its sql is NULL).
+        let key = [
+            Column { name: "table_name".into(), is_rowid_alias: false },
+            Column { name: "column_name".into(), is_rowid_alias: false },
+            Column { name: "extension_name".into(), is_rowid_alias: false },
+            Column { name: "rowid".into(), is_rowid_alias: false },
+        ];
+        let key_values = [
+            CellValue::Text(ext_row[0].clone()),
+            CellValue::Text(ext_row[1].clone()),
+            CellValue::Text(ext_row[2].clone()),
+            CellValue::Integer(1),
+        ];
+        let index_page =
+            sqlite::build_index_leaf(PAGE_SIZE, &[sqlite::encode_record(&key, &key_values)])
+                .map_err(|_| GeoPackageError::WriteTooLarge)?;
+        let autoindex = "sqlite_autoindex_gpkg_extensions_1";
+        master_extra.push(("index", autoindex.into(), "gpkg_extensions".into(), next_root, None));
+        trees.push(sqlite::TablePages {
+            pages: vec![(next_root, index_page)],
+            last_page: next_root,
+        });
+        next_root += 1;
+
+        let rows = rtree::build(&index_entries);
+        let node_cols = [
+            Column { name: "nodeno".into(), is_rowid_alias: true },
+            Column { name: "data".into(), is_rowid_alias: false },
+        ];
+        let node_cells: Vec<(i64, Vec<u8>)> = rows
+            .nodes
+            .iter()
+            .map(|(n, blob)| {
+                (
+                    *n,
+                    sqlite::encode_record(
+                        &node_cols,
+                        &[CellValue::Null, CellValue::Blob(blob.clone())],
+                    ),
+                )
+            })
+            .collect();
+        let parent_cols = [
+            Column { name: "nodeno".into(), is_rowid_alias: true },
+            Column { name: "parentnode".into(), is_rowid_alias: false },
+        ];
+        let parent_cells: Vec<(i64, Vec<u8>)> = rows
+            .parents
+            .iter()
+            .map(|(n, parent)| {
+                (
+                    *n,
+                    sqlite::encode_record(
+                        &parent_cols,
+                        &[CellValue::Null, CellValue::Integer(*parent)],
+                    ),
+                )
+            })
+            .collect();
+        let rowid_cols = [
+            Column { name: "rowid".into(), is_rowid_alias: true },
+            Column { name: "nodeno".into(), is_rowid_alias: false },
+        ];
+        let rowid_cells: Vec<(i64, Vec<u8>)> = rows
+            .rowids
+            .iter()
+            .map(|(id, node)| {
+                (
+                    *id,
+                    sqlite::encode_record(
+                        &rowid_cols,
+                        &[CellValue::Null, CellValue::Integer(*node)],
+                    ),
+                )
+            })
+            .collect();
+
+        let shadows = [
+            (
+                format!("{index}_node"),
+                format!("CREATE TABLE \"{index}_node\"(nodeno INTEGER PRIMARY KEY,data)"),
+                node_cells,
+            ),
+            (
+                format!("{index}_parent"),
+                format!("CREATE TABLE \"{index}_parent\"(nodeno INTEGER PRIMARY KEY,parentnode)"),
+                parent_cells,
+            ),
+            (
+                format!("{index}_rowid"),
+                format!("CREATE TABLE \"{index}_rowid\"(rowid INTEGER PRIMARY KEY,nodeno)"),
+                rowid_cells,
+            ),
+        ];
+        for (name, sql, cells) in shadows {
+            let tree = sqlite::build_table_tree(PAGE_SIZE, next_root, &cells)
+                .map_err(|_| GeoPackageError::WriteTooLarge)?;
+            master_extra.push(("table", name.clone(), name, next_root, Some(sql)));
+            next_root = tree.last_page + 1;
+            trees.push(tree);
+        }
+
+        master_extra.push((
+            "table",
+            index.clone(),
+            index.clone(),
+            0,
+            Some(rtree::virtual_table_sql(table, geometry)),
+        ));
+        for (name, sql) in rtree::triggers(table, &index_id, geometry) {
+            master_extra.push(("trigger", name, table.clone(), 0, Some(sql)));
+        }
+    }
+
+    let page_count =
+        trees.iter().map(|t| t.last_page).fold(features.last_page.max(FEATURE_ROOT), u32::max);
     let mut buf = vec![0u8; PAGE_SIZE * usize::try_from(page_count).unwrap()];
 
-    let master_cells = build_master_cells(opts, &attr_specs);
+    let mut master_cells = build_master_cells(opts, &attr_specs);
+    let master_columns = sqlite_master_columns();
+    for (kind, name, tbl_name, rootpage, sql) in master_extra {
+        let row = vec![
+            CellValue::Text(kind.to_string()),
+            CellValue::Text(name),
+            CellValue::Text(tbl_name),
+            CellValue::Integer(i64::from(rootpage)),
+            sql.map_or(CellValue::Null, CellValue::Text),
+        ];
+        master_cells
+            .push((master_cells.len() as i64 + 1, sqlite::encode_record(&master_columns, &row)));
+    }
     let master_page = sqlite::build_leaf_page(PAGE_SIZE, 100, &master_cells);
     buf[0..PAGE_SIZE].copy_from_slice(&master_page);
 
@@ -266,9 +433,11 @@ pub fn write_gpkg(features: &[Feature], opts: &WriteOptions) -> Result<Vec<u8>, 
         buf[start..start + PAGE_SIZE].copy_from_slice(page);
     }
 
-    for (number, page) in &features.pages {
-        let start = (*number as usize - 1) * PAGE_SIZE;
-        buf[start..start + PAGE_SIZE].copy_from_slice(page);
+    for tree in std::iter::once(&features).chain(trees.iter()) {
+        for (number, page) in &tree.pages {
+            let start = (*number as usize - 1) * PAGE_SIZE;
+            buf[start..start + PAGE_SIZE].copy_from_slice(page);
+        }
     }
 
     // The DB header overwrites the first 100 bytes of page 1 (the b-tree header of the
@@ -630,6 +799,18 @@ fn build_master_cells(opts: &WriteOptions, attr_specs: &[(String, String)]) -> V
         .collect()
 }
 
+fn extensions_sql() -> String {
+    "CREATE TABLE gpkg_extensions (table_name TEXT, column_name TEXT, extension_name TEXT NOT NULL, definition TEXT NOT NULL, scope TEXT NOT NULL, CONSTRAINT ge_tce UNIQUE (table_name, column_name, extension_name))"
+        .to_string()
+}
+
+fn extensions_columns() -> Vec<Column> {
+    ["table_name", "column_name", "extension_name", "definition", "scope"]
+        .iter()
+        .map(|n| Column { name: (*n).to_string(), is_rowid_alias: false })
+        .collect()
+}
+
 fn srs_sql() -> String {
     "CREATE TABLE gpkg_spatial_ref_sys (srs_name TEXT, srs_id INTEGER, organization TEXT, \
 organization_coordsys_id INTEGER, definition TEXT, description TEXT)"
@@ -726,6 +907,7 @@ mod tests {
             srs_id: 4326,
             id_column: Some("fid".into()),
             description: Some("test layer".into()),
+            spatial_index: false,
         }
     }
 

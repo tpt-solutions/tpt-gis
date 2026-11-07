@@ -28,6 +28,7 @@ fn main() -> Result<(), GeoPackageError> {
         srs_id: 4326,
         id_column: Some("fid".into()),
         description: Some("demo layer".into()),
+        spatial_index: true,
     };
     let bytes = write_gpkg(&features, &opts)?;
     println!("wrote {} gpkg bytes", bytes.len());

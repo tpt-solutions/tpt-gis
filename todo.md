@@ -514,8 +514,13 @@ the same logic, not real GDAL/QGIS/libtiff output; add third-party fixtures.
       - Also done: a shapefile writer (`.shp`, `.shx`, `.dbf`, `.cpg`), checked by GDAL
         (read through pyogrio).
       - Also done: `.prj` for shapefiles written from GeoJSON (WGS84) or shapefiles.
-      - Open: WKT `EMPTY` (the model has no empty geometries), GeoPackage
-        WITHOUT ROWID and R-tree tables.
+      - Done: GeoPackage R-tree spatial index (`WriteOptions::spatial_index`): the `rtree`
+        table, its shadow tables, the six maintenance triggers, and the `gpkg_extensions`
+        row, plus the automatic index for the UNIQUE constraint. Checked with SQLite's own
+        `rtreecheck` (after writing and after every trigger path, through Python `ST_*`
+        functions), and GDAL reads the file and gives the same bounding-box count.
+      - Open: WKT `EMPTY` (the model has no empty geometries), GeoPackage WITHOUT ROWID
+        tables, and a CLI flag for the index.
 - [ ] Raster: overview IFDs, COG writer (multi-band read and write, and the single-band GeoTIFF writer, are done)
       - Done: PixelIsPoint georeferencing (the origin moves half a pixel); ZSTD decoding
         (`ruzstd`, decode only). Tests cover raw-block frames; real compressed streams are

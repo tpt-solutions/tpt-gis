@@ -5,6 +5,18 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+- GeoPackage R-tree spatial index: `WriteOptions::spatial_index` writes the
+  `gpkg_rtree_index` extension (rtree table, shadow tables, triggers, `gpkg_extensions`
+  row). `WriteOptions` has a new field, so struct literals need `spatial_index`.
+
+### Fixed
+- GeoPackage writer: when an `INTEGER PRIMARY KEY` id column was used, the record omitted
+  its NULL slot, so other readers would see shifted columns (the reader had the same
+  assumption, so round trips hid it). The writer and reader both follow the record format.
+- GeoPackage writer: the `UNIQUE` constraint on `gpkg_extensions` now has its automatic
+  index, so the file opens without a "malformed" error.
+
 ## [0.1.0] - 2025-08-05
 
 ### Added
