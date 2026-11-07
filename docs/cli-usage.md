@@ -54,12 +54,14 @@ Formats are inferred from extensions, or set with `--from` and `--to`:
 | GeoJSON | `.geojson`, `.json` | yes | yes |
 | WKT | `.wkt` | yes (one geometry per line) | yes |
 | WKB | `.wkb` | yes (one geometry per file) | yes (as one `GeometryCollection`) |
-| Shapefile | `.shp` | yes (geometry only) | no |
+| Shapefile | `.shp` | yes (with `.dbf` attributes) | no |
 | GeoPackage | `.gpkg` | yes | yes (table `features`, geometry column `geom`, SRID 4326) |
 
 - Use `--input -` to read standard input; it needs `--from`.
 - Without `--output`, the result goes to standard output as GeoJSON unless `--to` is set.
-- Shapefile attributes (`.dbf`) are not read yet, so shapefile features have no properties.
+- A shapefile's sibling `.dbf` supplies each feature's properties, paired by row. The sibling
+  `.cpg` names the text encoding (UTF-8, ISO 8859-1, or Windows-1252). Deleted rows are
+  skipped. A `.dbf` and `.shp` with different record counts is an error.
 
 ```sh
 tptgis convert --input roads.shp --output roads.geojson

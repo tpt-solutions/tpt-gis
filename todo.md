@@ -478,8 +478,10 @@ the same logic, not real GDAL/QGIS/libtiff output; add third-party fixtures.
         `Z`/`M`/`ZM` tags and `SRID=` prefixes, bare GeoJSON Feature and geometry objects,
         and `properties: null`. Z and M values are not kept: the model is 2D.
       - Also done: shapefile Z and M types read as 2D; `info` reports a shapefile's `.prj`.
-      - Open: WKT `EMPTY` (the model has no empty geometries), `.cpg` encodings, a
-        shapefile writer, GeoPackage WITHOUT ROWID and R-tree tables.
+      - Also done: `.cpg` encodings; `.dbf` attributes flow through `convert`, `info`, and
+        `validate`.
+      - Open: WKT `EMPTY` (the model has no empty geometries), a shapefile writer,
+        GeoPackage WITHOUT ROWID and R-tree tables.
 - [ ] Raster: multi-band, ZSTD, overview IFDs, GeoTIFF/COG writer
       - Done: PixelIsPoint georeferencing (the origin moves half a pixel); ZSTD decoding
         (`ruzstd`, decode only). Tests cover raw-block frames; real compressed streams are
