@@ -3,7 +3,6 @@
 **/target/
 **/*.rs.bk
 *.pdb
-Cargo.lock
 
 .vscode/
 .idea/
@@ -27,4 +26,4 @@ Thumbs.db
 **/.venv/
 **/__pycache__/
 **/*.pyc
-# Keep the bindings crate's Cargo.lock (application-style, reproducible wheels).
+# Cargo.lock is tracked: the CLI and Python extension ship binaries and need reproducible builds.

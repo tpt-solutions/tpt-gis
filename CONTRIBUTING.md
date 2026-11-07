@@ -62,8 +62,3 @@ file). If you have a fix or feature you'd like to see, please open an issue
 describing it first so it can be discussed and tracked. Large architectural
 changes in particular should start as an issue/discussion before any code is
 written.
-
-## Code of Conduct
-
-This project follows the [Code of Conduct](CODE_OF_CONDUCT.md). Please read it
-before participating.
