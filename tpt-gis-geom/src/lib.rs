@@ -24,6 +24,7 @@ pub mod buffer;
 pub mod clip;
 pub mod distance;
 pub mod hull;
+pub mod line_relate;
 pub mod line_string;
 pub mod measure;
 pub mod multi;

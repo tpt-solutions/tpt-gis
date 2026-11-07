@@ -484,7 +484,9 @@ the same logic, not real GDAL/QGIS/libtiff output; add third-party fixtures.
       - Done: line-polygon `intersects` (`predicates::line_intersects_polygon`) and
         `crosses` (`relate::line_crosses_polygon`, OGC: some of the line strictly inside and
         some outside). Checked against GEOS on 500 pairs, including boundary contact.
-      - Open: line-line `crosses`, `within` for lines, full DE-9IM.
+      - Done: line-line `crosses` (`line_relate::linestrings_cross`, OGC: the interiors meet
+        in points only), checked against GEOS on 600 grid polylines, 201 of them crossing.
+      - Open: `within` for lines, full DE-9IM.
       - Fixed: `clip` split nearly vertical edges in lexicographic order; a cut could fall
         before its edge's own endpoint, so union, intersection and difference were wrong
         for some inputs (union returned nothing). Found by the GEOS differential test.

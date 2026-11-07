@@ -24,7 +24,7 @@ const RELATIVE_TOLERANCE: f64 = 1e-14;
 /// the largest coordinate magnitude if that is larger. Below about 1e5 the absolute floor
 /// applies, so ordinary coordinates behave as before. Beyond that, rounding noise grows
 /// with magnitude and the absolute floor would fall below it.
-fn tolerance_for(points: &[Point]) -> f64 {
+pub(crate) fn tolerance_for(points: &[Point]) -> f64 {
     let magnitude = points.iter().fold(0.0_f64, |m, p| m.max(p.x.fabs()).max(p.y.fabs()));
     EPSILON.max(RELATIVE_TOLERANCE * magnitude)
 }
