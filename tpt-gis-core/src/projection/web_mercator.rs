@@ -25,7 +25,9 @@ pub fn forward(point: GeoPoint) -> PlanarPoint {
     let lat_deg = point.lat_deg.clamp(-MAX_LATITUDE_DEG, MAX_LATITUDE_DEG);
     let lat_rad = lat_deg.to_radians();
 
-    let x = EARTH_RADIUS_M * point.lon_rad();
+    // Longitudes outside [-180, 180) wrap, so 190°E projects like -170°.
+    let lon_deg = ((((point.lon_deg + 180.0) % 360.0) + 360.0) % 360.0) - 180.0;
+    let x = EARTH_RADIUS_M * lon_deg.to_radians();
     let y = EARTH_RADIUS_M * log(tan(core::f64::consts::FRAC_PI_4 + lat_rad / 2.0));
 
     PlanarPoint::new(x, y)
@@ -43,6 +45,15 @@ pub fn inverse(point: PlanarPoint) -> GeoPoint {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Longitudes beyond the antimeridian wrap to the equivalent point.
+    #[test]
+    fn longitude_wraps_at_the_antimeridian() {
+        let east = forward(GeoPoint::new(10.0, 190.0));
+        let west = forward(GeoPoint::new(10.0, -170.0));
+        assert!((east.x - west.x).abs() < 1e-6, "{} vs {}", east.x, west.x);
+        assert!((east.y - west.y).abs() < 1e-9);
+    }
 
     #[test]
     fn origin_maps_to_origin() {

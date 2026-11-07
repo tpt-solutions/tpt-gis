@@ -4,7 +4,9 @@
 //! in USGS Professional Paper 1395, "Map Projections: A Working Manual"), accurate to
 //! sub-millimeter precision within a UTM zone (±3° of the central meridian).
 
-use libm::{cos, floor, pow, sin, sqrt, tan};
+use libm::floor;
+
+use super::transverse_mercator::TransverseMercator;
 
 use crate::{Ellipsoid, GeoPoint, PlanarPoint};
 
@@ -27,18 +29,64 @@ pub struct Zone {
 }
 
 impl Zone {
-    /// Constructs a UTM zone.
+    /// Constructs a UTM zone. `number` is not range-checked; use [`Zone::try_new`]
+    /// for untrusted input.
     #[must_use]
     pub const fn new(number: u8, northern: bool) -> Self {
         Self { number, northern }
     }
 
-    /// Determines the UTM zone containing a geographic point, using the standard
-    /// 6°-wide banding (no allowance for the Norway/Svalbard irregular zones).
+    /// Constructs a UTM zone, returning `None` if `number` is not in `1..=60`.
+    #[must_use]
+    pub const fn try_new(number: u8, northern: bool) -> Option<Self> {
+        if number >= 1 && number <= 60 {
+            Some(Self { number, northern })
+        } else {
+            None
+        }
+    }
+
+    /// Determines the UTM zone containing a geographic point.
+    ///
+    /// Uses the standard 6°-wide banding, with the two irregular regions applied:
+    /// Norway (zone 32 is widened to 3°–12°E for 56°–64°N, i.e. zone 32V) and Svalbard
+    /// (zones 31X, 33X, 35X and 37X cover 72°–84°N, with 0°–9°, 9°–21°, 21°–33° and
+    /// 33°–42° of longitude respectively).
+    ///
+    /// Longitudes outside `[-180, 180]` are wrapped. Non-finite input yields an
+    /// unspecified zone; use [`Zone::try_containing`] to reject it instead.
     #[must_use]
     pub fn containing(point: GeoPoint) -> Self {
-        let number = (floor((point.lon_deg + 180.0) / 6.0) as i32 + 1).clamp(1, 60) as u8;
-        Self { number, northern: point.lat_deg >= 0.0 }
+        let lon = wrap_longitude_deg(point.lon_deg);
+        let lat = point.lat_deg;
+        let northern = lat >= 0.0;
+        let mut number = (floor((lon + 180.0) / 6.0) as i32 + 1).clamp(1, 60) as u8;
+
+        // Norway: zone 32 extends east to 12°E at 56°N–64°N, so 5°E there is zone 32.
+        if (56.0..64.0).contains(&lat) && (3.0..12.0).contains(&lon) {
+            number = 32;
+        }
+        // Svalbard: the irregular 12° zones of 72°N–84°N.
+        if (72.0..84.0).contains(&lat) {
+            if (0.0..9.0).contains(&lon) {
+                number = 31;
+            } else if (9.0..21.0).contains(&lon) {
+                number = 33;
+            } else if (21.0..33.0).contains(&lon) {
+                number = 35;
+            } else if (33.0..42.0).contains(&lon) {
+                number = 37;
+            }
+        }
+        Self { number, northern }
+    }
+
+    /// Like [`Zone::containing`], but returns `None` if either coordinate is not finite
+    /// or the latitude is outside `[-90, 90]`.
+    #[must_use]
+    pub fn try_containing(point: GeoPoint) -> Option<Self> {
+        let finite = point.lat_deg.is_finite() && point.lon_deg.is_finite();
+        (finite && (-90.0..=90.0).contains(&point.lat_deg)).then(|| Self::containing(point))
     }
 
     /// Central meridian of this zone, in decimal degrees.
@@ -55,98 +103,39 @@ impl Zone {
     }
 }
 
+/// Wraps a longitude in degrees into `[-180, 180)`.
+fn wrap_longitude_deg(lon_deg: f64) -> f64 {
+    ((((lon_deg + 180.0) % 360.0) + 360.0) % 360.0) - 180.0
+}
+
+/// The Transverse Mercator projection for a UTM zone: origin on the equator at the zone's
+/// central meridian, scale [`K0`], false easting [`FALSE_EASTING_M`], and a false northing
+/// of 10 000 000 m in the southern hemisphere.
+fn zone_projection(ellipsoid: &Ellipsoid, zone: Zone) -> TransverseMercator {
+    let false_northing = if zone.northern { 0.0 } else { FALSE_NORTHING_SOUTH_M };
+    TransverseMercator::new(
+        ellipsoid,
+        0.0,
+        zone.central_meridian_deg(),
+        K0,
+        FALSE_EASTING_M,
+        false_northing,
+    )
+}
+
 /// Projects a geographic coordinate to UTM easting/northing (in meters) within `zone`.
+///
+/// The longitude offset from the zone's central meridian wraps to `[-180, 180)`, so a
+/// point 179°E projects identically to 181°W for any zone.
 #[must_use]
 pub fn forward(ellipsoid: &Ellipsoid, point: GeoPoint, zone: Zone) -> PlanarPoint {
-    let a = ellipsoid.semi_major_axis;
-    let e2 = ellipsoid.eccentricity_squared();
-    let ep2 = ellipsoid.second_eccentricity_squared();
-
-    let phi = point.lat_rad();
-    let lambda = point.lon_rad();
-    let lambda0 = zone.central_meridian_deg().to_radians();
-
-    let (sin_phi, cos_phi, tan_phi) = (sin(phi), cos(phi), tan(phi));
-
-    let n = a / sqrt(1.0 - e2 * sin_phi * sin_phi);
-    let t = tan_phi * tan_phi;
-    let c = ep2 * cos_phi * cos_phi;
-    let big_a = (lambda - lambda0) * cos_phi;
-
-    let m = a
-        * ((1.0 - e2 / 4.0 - 3.0 * e2 * e2 / 64.0 - 5.0 * pow(e2, 3.0) / 256.0) * phi
-            - (3.0 * e2 / 8.0 + 3.0 * e2 * e2 / 32.0 + 45.0 * pow(e2, 3.0) / 1024.0)
-                * sin(2.0 * phi)
-            + (15.0 * e2 * e2 / 256.0 + 45.0 * pow(e2, 3.0) / 1024.0) * sin(4.0 * phi)
-            - (35.0 * pow(e2, 3.0) / 3072.0) * sin(6.0 * phi));
-
-    let easting = K0
-        * n
-        * (big_a
-            + (1.0 - t + c) * pow(big_a, 3.0) / 6.0
-            + (5.0 - 18.0 * t + t * t + 72.0 * c - 58.0 * ep2) * pow(big_a, 5.0) / 120.0)
-        + FALSE_EASTING_M;
-
-    let mut northing = K0
-        * (m + n
-            * tan_phi
-            * (big_a * big_a / 2.0
-                + (5.0 - t + 9.0 * c + 4.0 * c * c) * pow(big_a, 4.0) / 24.0
-                + (61.0 - 58.0 * t + t * t + 600.0 * c - 330.0 * ep2) * pow(big_a, 6.0) / 720.0));
-
-    if !zone.northern {
-        northing += FALSE_NORTHING_SOUTH_M;
-    }
-
-    PlanarPoint::new(easting, northing)
+    zone_projection(ellipsoid, zone).forward(point)
 }
 
 /// Projects a UTM easting/northing (in meters) within `zone` back to a geographic coordinate.
 #[must_use]
 pub fn inverse(ellipsoid: &Ellipsoid, point: PlanarPoint, zone: Zone) -> GeoPoint {
-    let a = ellipsoid.semi_major_axis;
-    let e2 = ellipsoid.eccentricity_squared();
-    let ep2 = ellipsoid.second_eccentricity_squared();
-
-    let x = point.x - FALSE_EASTING_M;
-    let y = if zone.northern { point.y } else { point.y - FALSE_NORTHING_SOUTH_M };
-
-    let m = y / K0;
-    let mu = m / (a * (1.0 - e2 / 4.0 - 3.0 * e2 * e2 / 64.0 - 5.0 * pow(e2, 3.0) / 256.0));
-
-    let e1 = (1.0 - sqrt(1.0 - e2)) / (1.0 + sqrt(1.0 - e2));
-
-    let phi1 = mu
-        + (3.0 * e1 / 2.0 - 27.0 * pow(e1, 3.0) / 32.0) * sin(2.0 * mu)
-        + (21.0 * e1 * e1 / 16.0 - 55.0 * pow(e1, 4.0) / 32.0) * sin(4.0 * mu)
-        + (151.0 * pow(e1, 3.0) / 96.0) * sin(6.0 * mu)
-        + (1097.0 * pow(e1, 4.0) / 512.0) * sin(8.0 * mu);
-
-    let (sin_phi1, cos_phi1, tan_phi1) = (sin(phi1), cos(phi1), tan(phi1));
-
-    let c1 = ep2 * cos_phi1 * cos_phi1;
-    let t1 = tan_phi1 * tan_phi1;
-    let n1 = a / sqrt(1.0 - e2 * sin_phi1 * sin_phi1);
-    let r1 = a * (1.0 - e2) / pow(1.0 - e2 * sin_phi1 * sin_phi1, 1.5);
-    let d = x / (n1 * K0);
-
-    let phi = phi1
-        - (n1 * tan_phi1 / r1)
-            * (d * d / 2.0
-                - (5.0 + 3.0 * t1 + 10.0 * c1 - 4.0 * c1 * c1 - 9.0 * ep2) * pow(d, 4.0) / 24.0
-                + (61.0 + 90.0 * t1 + 298.0 * c1 + 45.0 * t1 * t1 - 252.0 * ep2 - 3.0 * c1 * c1)
-                    * pow(d, 6.0)
-                    / 720.0);
-
-    let lambda0 = zone.central_meridian_deg().to_radians();
-    let lambda = lambda0
-        + (d - (1.0 + 2.0 * t1 + c1) * pow(d, 3.0) / 6.0
-            + (5.0 - 2.0 * c1 + 28.0 * t1 - 3.0 * c1 * c1 + 8.0 * ep2 + 24.0 * t1 * t1)
-                * pow(d, 5.0)
-                / 120.0)
-            / cos_phi1;
-
-    GeoPoint::new(phi.to_degrees(), lambda.to_degrees())
+    zone_projection(ellipsoid, zone).inverse(point)
 }
 
 #[cfg(test)]
@@ -158,6 +147,57 @@ mod tests {
         let zone = Zone::containing(GeoPoint::new(51.5, 0.001));
         assert_eq!(zone.number, 31);
         assert!(zone.northern);
+    }
+
+    #[test]
+    fn try_new_validates_zone_number() {
+        assert_eq!(Zone::try_new(0, true), None);
+        assert_eq!(Zone::try_new(61, false), None);
+        assert_eq!(Zone::try_new(60, false), Some(Zone::new(60, false)));
+    }
+
+    #[test]
+    fn try_containing_rejects_non_finite_input() {
+        assert_eq!(Zone::try_containing(GeoPoint::new(f64::NAN, 0.0)), None);
+        assert_eq!(Zone::try_containing(GeoPoint::new(0.0, f64::INFINITY)), None);
+        assert_eq!(Zone::try_containing(GeoPoint::new(91.0, 0.0)), None);
+        assert!(Zone::try_containing(GeoPoint::new(10.0, 10.0)).is_some());
+    }
+
+    /// Southern Norway (56°–64°N, 3°–12°E) is zone 32V, not 31V.
+    #[test]
+    fn norway_exception_zone_32v() {
+        let zone = Zone::containing(GeoPoint::new(60.0, 5.0));
+        assert_eq!(zone.number, 32);
+        assert!(zone.northern);
+        assert_eq!(zone.epsg_code(), 32632);
+    }
+
+    /// Svalbard's irregular zones: 33X covers 9°E–21°E at 78°N.
+    #[test]
+    fn svalbard_exception_zone_33x() {
+        assert_eq!(Zone::containing(GeoPoint::new(78.0, 15.0)).number, 33);
+        assert_eq!(Zone::containing(GeoPoint::new(78.0, 3.0)).number, 31);
+    }
+
+    /// Longitudes beyond ±180° wrap to the same zone as their equivalent.
+    #[test]
+    fn containing_wraps_longitude() {
+        assert_eq!(
+            Zone::containing(GeoPoint::new(0.0, 190.0)),
+            Zone::containing(GeoPoint::new(0.0, -170.0))
+        );
+    }
+
+    /// 179°E and 181°W are the same meridian; within zone 1 (central meridian -177°)
+    /// they must project identically, not ~360° apart.
+    #[test]
+    fn forward_wraps_longitude_offset() {
+        let zone = Zone::new(1, true);
+        let east = forward(&Ellipsoid::WGS84, GeoPoint::new(10.0, 179.0), zone);
+        let west = forward(&Ellipsoid::WGS84, GeoPoint::new(10.0, -181.0), zone);
+        assert!((east.x - west.x).abs() < 1e-6, "{} vs {}", east.x, west.x);
+        assert!((east.y - west.y).abs() < 1e-6);
     }
 
     /// The forward/inverse pair use a truncated 6th-order series expansion (per USGS
