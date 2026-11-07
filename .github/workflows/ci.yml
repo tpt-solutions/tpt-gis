@@ -26,6 +26,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       - run: cargo build --workspace --all-targets
       - run: cargo test --workspace
 
@@ -38,6 +39,7 @@ jobs:
         with:
           toolchain: stable
           targets: thumbv7em-none-eabihf,riscv32imc-unknown-none-elf,wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       - run: cargo build -p tpt-gis-core -p tpt-gis-geom --target thumbv7em-none-eabihf
       # riscv32imc-unknown-none-elf is the target for the ESP32-C3 (mainline Rust
       # support, no toolchain fork needed). The ESP32/ESP32-S3 (Xtensa) targets need
@@ -49,6 +51,42 @@ jobs:
       # The MVP 2 demo's own check_position logic (not just tpt-gis-core/geom) is
       # no_std-portable too, so it's ready to drop into real ESP32-C3 firmware.
       - run: cargo build -p drone-geofence-demo --lib --no-default-features --target riscv32imc-unknown-none-elf
+
+  msrv:
+    name: MSRV (Rust 1.81)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: "1.81"
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - run: cargo test --workspace
+
+  docs:
+    name: rustdoc (warnings are errors)
+    runs-on: ubuntu-latest
+    env:
+      RUSTDOCFLAGS: "-D warnings"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - run: cargo doc --workspace --no-deps
+
+  feature-powerset:
+    name: feature powerset (cargo-hack)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - run: cargo install cargo-hack --locked
+      - run: cargo hack check --workspace --feature-powerset --no-dev-deps --exclude-no-default-features
 
   fmt:
     name: rustfmt
@@ -70,6 +108,7 @@ jobs:
         with:
           toolchain: stable
           components: clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       - run: cargo clippy --workspace --all-targets -- -D warnings
 
   license-check:

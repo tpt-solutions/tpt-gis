@@ -385,12 +385,10 @@ features from an earlier pass.
        crate is built as an abi3 extension.
 
 ### Housekeeping (flagged, not actioned)
-- [ ] Six untracked `CHANGELOG.md` files (one per crate) plus
+- [x] Six untracked `CHANGELOG.md` files (one per crate) plus
       `tpt-gis-core/examples/geodesic_demo.rs` and
-      `tpt-gis-geom/examples/geometry_demo.rs` sit in the working tree from a prior
-      session but aren't committed — `cargo package`/`cargo publish` only includes
-      VCS-tracked files by default, so these need `git add`/commit before any
-      crates.io publish
+      `tpt-gis-geom/examples/geometry_demo.rs` — all now committed (checked with
+      `git ls-files`), so `cargo publish` will include them
 
 ---
 
@@ -411,11 +409,18 @@ the same logic, not real GDAL/QGIS/libtiff output; add third-party fixtures.
 - [x] `polygon_contains_polygon`: ignores outer-polygon holes; rejects polygons that
       touch the outer boundary (OGC `contains` allows boundary contact)
 - [x] `polygons_intersect`: hole edges never tested
-- [ ] `orientation`: absolute `EPSILON = 1e-9` is scale-dependent — relative epsilon
-      or Shewchuk adaptive predicates; define `point_in_ring` boundary behaviour
-- [ ] GeoPackage blob header: wrong flag bits (byte order = bit 0, envelope =
-      bits 1–3, empty = bit 4) and envelope sizes (32/48/64 B); verify against a
-      GDAL-written `.gpkg`
+- [x] `orientation`: the cross-product test was already relative to the edge lengths.
+      The segment bounding-box and point-on-boundary tests now use `tolerance_for`, a
+      floor of `EPSILON` that grows to 1e-14 × the coordinate magnitude (about 45 ulps),
+      so near-touches at 1e9 scale are found. `point_in_ring`'s boundary rule is defined
+      and tested (left and bottom edges inside, right and top outside). Shewchuk-style
+      adaptive predicates are not implemented.
+- [x] GeoPackage blob header: flags and envelope sizes checked against a GDAL-written
+      `.gpkg` (pyogrio, GDAL 3.12), with envelopes and an empty point; the fixture is in
+      `tpt-gis-io/tests/fixtures/`. The check found a real bug instead: an
+      `INTEGER PRIMARY KEY` column must have a NULL slot in the record header, and our
+      reader skipped it and our writer omitted it, so other readers saw shifted columns.
+      Both are fixed, with a layout test.
 - [x] GeoPackage writer: set `application_id`/`user_version`, add srs rows 0 and -1,
       sort/dedupe rowids, lift single-4KiB-page limit (>~250 vertices → `WriteTooLarge`)
 - [x] GeoPackage reader: tolerate rows with fewer columns than schema
@@ -431,8 +436,9 @@ the same logic, not real GDAL/QGIS/libtiff output; add third-party fixtures.
 - [x] CLI: missing `format!` in unsupported-CRS error; `--format` should be a
       `ValueEnum`; broken-pipe panic on stdout
 - [x] Local tangent plane: wrap antimeridian, guard poles, use ellipsoidal north scale
-- [ ] UTM: Norway (32V) / Svalbard exceptions, longitude wrapping, validate `Zone::new`,
-      reject NaN; Web Mercator wrapping/clamping
+- [x] UTM: Norway (32V) / Svalbard exceptions, longitude wrapping, `Zone::try_new` and
+      `try_containing` reject bad input; Web Mercator wraps longitude and clamps latitude.
+      `Zone::new` stays unchecked by design (use `try_new` for untrusted input).
 - [x] `geocentric_to_geodetic` wrong at the poles
 - [x] Quadtree depth reset on `subdivide`
 
@@ -442,8 +448,10 @@ the same logic, not real GDAL/QGIS/libtiff output; add third-party fixtures.
 - [x] SQLite reader: cycle/depth guard in `read_btree`; page number 0 underflow;
       untrusted `payload_len` → `with_capacity`; unchecked `pos + len`
 - [x] `parse_create_table`: non-ASCII quoted name slice panic; quoted names with spaces
-- [ ] TIFF: IFD chain cycle (infinite loop); width 0 divide-by-zero; `u32`→`u16`
-      truncation; bounded `decode_lzw` (existing deferred item)
+- [x] TIFF: IFD chain cycle (explicit cycle error, plus a length cap); zero width or
+      height rejected; out-of-range tag values rejected by `u16_tag`; `decode_lzw` now
+      decodes in bounded chunks and stops once the output exceeds the declared size.
+      Tests cover each.
 - [x] Shapefile: 0-part polygon yields `rings: []` (later panics); swallowed header error
 - [x] R-tree `str_pack` panics on NaN bboxes — return `Result` or filter
 - [ ] Extend fuzz targets after each parser fix; run (not just compile) fuzzers on a schedule
@@ -451,9 +459,21 @@ the same logic, not real GDAL/QGIS/libtiff output; add third-party fixtures.
 ### 4.3 Hygiene
 - [x] Remove or implement unused `serde` / `alloc` features in core and geom
 - [x] Fix `tpt-gis-core/src/lib.rs` `std` doc comment (libm is used unconditionally)
-- [ ] Verify MSRV 1.81 for `no_std` float methods (`abs` etc.)
-- [ ] Commit `Cargo.lock` (repo ships a binary + Python extension)
+- [x] Verify MSRV 1.81 for `no_std` float methods (`abs` etc.). Found and fixed: float
+      arithmetic in `const fn` (`Ellipsoid::from_inverse_flattening`, `GeoTransform::to_gdal`
+      are now plain `fn`; the built-in ellipsoids are `const` struct literals). Dependencies
+      needing a newer Rust were pinned in `Cargo.lock`, `h3o` moved to 0.6 (0.8+ needs
+      Rust 1.82+), and `proptest`/`tempfile` moved to older releases. `cargo +1.81 test
+      --workspace` passes. CI has an `msrv` job.
+- [x] Commit `Cargo.lock` (repo ships a binary + Python extension) — tracked. The lock is
+      pinned so the workspace builds on Rust 1.81 (see the MSRV item below).
 - [ ] Add real GDAL/QGIS/libtiff-produced fixtures to raster/io tests
+      - Done: GDAL-written GeoTIFFs (tiled uint16 with deflate and predictor 2; striped
+        float32, three bands, deflate and predictor 3; single-band float32 predictor 3) in
+        `tpt-gis-raster/tests/fixtures/`, checked cell by cell against GDAL's arrays. A
+        GDAL-written GeoPackage in `tpt-gis-io/tests/fixtures/`. These found the zlib,
+        predictor-3 and rowid-alias bugs.
+      - Open: QGIS- and libtiff-written files.
 
 ### 4.4 Missing features (by adoption value)
 - [x] `Multi*` + `GeometryCollection` in `tpt-gis-geom`
@@ -542,6 +562,12 @@ the same logic, not real GDAL/QGIS/libtiff output; add third-party fixtures.
 - [ ] Jobs: MSRV 1.81, `cargo-hack` feature powerset, `cargo doc -D warnings`,
       doctests, `http` feature, `cargo-semver-checks`, coverage (llvm-cov → Codecov),
       scheduled `cargo audit` / `cargo deny` advisories, scheduled fuzz runs
+      - Done in `ci.yml`: `msrv` (Rust 1.81 test), `docs` (`RUSTDOCFLAGS=-D warnings`),
+        `feature-powerset` (`cargo hack check --feature-powerset`; passes locally across
+        81 combinations), and `Swatinem/rust-cache` on the build jobs. Doc warnings were
+        fixed so the docs job passes.
+      - Open: doctests as a separate job, the `http` feature in CI, semver checks,
+        coverage, scheduled audit and fuzz runs.
 - [ ] `release.yml`: ordered `cargo publish`, GitHub Release with changelog extraction,
       prebuilt `tptgis` binaries, `cargo-binstall` metadata, Homebrew formula
 - [ ] Publish crates + wheels and tag a first release (nothing is on crates.io/PyPI yet;

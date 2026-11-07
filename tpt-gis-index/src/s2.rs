@@ -2,7 +2,7 @@
 //!
 //! S2 subdivides the unit sphere into six cube faces, each recursively
 //! quartered into a quadtree of cells. A cell is identified by a 64-bit
-//! [`S2CellId`](S2CellId) that packs the face (3 bits) and, level by level, the
+//! [`S2CellId`] that packs the face (3 bits) and, level by level, the
 //! two bits of the cell's `(i, j)` position on its face, with a trailing marker
 //! bit that records the level.
 //!

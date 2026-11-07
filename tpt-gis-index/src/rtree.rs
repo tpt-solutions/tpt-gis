@@ -4,7 +4,7 @@
 //! Incremental insertion follows Guttman's original algorithm (R. Guttman, 1984,
 //! "R-Trees: A Dynamic Index Structure for Spatial Searching"): `ChooseLeaf` picks
 //! the child requiring the least bounding-box enlargement at each level, and a
-//! node that overflows [`MAX_ENTRIES`] is split with the quadratic-cost heuristic
+//! node that overflows `MAX_ENTRIES` is split with the quadratic-cost heuristic
 //! (pick the two entries that would waste the most area if grouped together as
 //! seeds, then greedily assign the rest to whichever group needs the least
 //! enlargement).
