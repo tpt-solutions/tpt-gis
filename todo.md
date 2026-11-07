@@ -495,10 +495,11 @@ the same logic, not real GDAL/QGIS/libtiff output; add third-party fixtures.
       CSV header row + unquoted string values, file path in parse errors
 - [x] CLI: `run_with_args` should not call `process::exit` (testable); add
       `tpt-gis-cli/tests`
-- [ ] Python: `.pyi` stubs + `py.typed`, `__geo_interface__`, bounds/area/length,
-      `__eq__`/`__hash__`/pickle, exception hierarchy, `allow_threads`, numpy
-      interop, zipped shapefile geometry+attributes, wheel matrix (aarch64,
-      musllinux, universal2), classifiers
+- [ ] Python: `.pyi` stubs + `py.typed` (done: the native module is
+      `tpt_gis_py._core`, stubs are checked by `mypy.stubtest` in CI), `__geo_interface__`,
+      bounds/area/length, `__eq__`/`__hash__`/pickle, exception hierarchy,
+      `allow_threads`, numpy interop, zipped shapefile geometry+attributes, wheel matrix
+      (aarch64, musllinux, universal2), classifiers
 
 ### 4.7 Docs & adoption
 - [ ] `docs/coming-from-gdal-proj-geos.md`: parity table + side-by-side with
