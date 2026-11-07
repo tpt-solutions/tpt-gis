@@ -490,7 +490,7 @@ the same logic, not real GDAL/QGIS/libtiff output; add third-party fixtures.
       - Also done: `.prj` for shapefiles written from GeoJSON (WGS84) or shapefiles.
       - Open: WKT `EMPTY` (the model has no empty geometries), GeoPackage
         WITHOUT ROWID and R-tree tables.
-- [ ] Raster: multi-band, overview IFDs, COG writer (single-band GeoTIFF writer done)
+- [ ] Raster: overview IFDs, COG writer (multi-band read and write, and the single-band GeoTIFF writer, are done)
       - Done: PixelIsPoint georeferencing (the origin moves half a pixel); ZSTD decoding
         (`ruzstd`, decode only). Tests cover raw-block frames; real compressed streams are
         exercised by the decoder's own tests, not by ours.

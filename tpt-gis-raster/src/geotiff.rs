@@ -80,8 +80,9 @@ pub enum GeoTiffError {
     UnknownType(u16),
     /// The image declared a sample size, layout, or format this reader rejects.
     Unsupported(&'static str),
-    /// More than one sample per pixel was declared; only single-band rasters are
-    /// supported.
+    /// More than one sample per pixel was declared. The reader no longer returns this:
+    /// every band of a multi-band image is available through [`GeoTiff::read_image_band`].
+    /// It is kept so existing matches still compile.
     MultiSample(usize),
     /// A strip/tile was larger (before decompression) than its declared byte
     /// count, or vice versa.
@@ -271,6 +272,7 @@ enum Layout {
 struct ImageInfo {
     width: u32,
     height: u32,
+    samples_per_pixel: u16,
     bits_per_sample: u16,
     sample_format: u16,
     compression: u16,
@@ -411,8 +413,26 @@ impl GeoTiff {
     /// # Errors
     /// Returns a [`GeoTiffError`] if the image is unsupported or decoding fails.
     pub fn read_image(&self, index: usize) -> Result<AnyBand> {
+        self.read_image_band(index, 0)
+    }
+
+    /// Decodes band `band` (zero-based) of image `index`. A single-band image has only
+    /// band 0; a multi-band image has one band per sample of each pixel.
+    ///
+    /// # Errors
+    /// Returns [`GeoTiffError::Unsupported`] if `band` is out of range, or as
+    /// [`GeoTiff::read_image`] otherwise.
+    pub fn read_image_band(&self, index: usize, band: usize) -> Result<AnyBand> {
         let info = self.image_info(index)?;
-        self.decode_full(&info)
+        self.decode_full(&info, band)
+    }
+
+    /// The number of bands (samples per pixel) in image `index`.
+    ///
+    /// # Errors
+    /// Returns a [`GeoTiffError`] if the IFD cannot be read.
+    pub fn band_count(&self, index: usize) -> Result<usize> {
+        Ok(usize::from(self.image_info(index)?.samples_per_pixel))
     }
 
     /// Decodes the first image. See [`GeoTiff::read_image`].
@@ -444,7 +464,7 @@ impl GeoTiff {
         if x1 <= x0 || y1 <= y0 {
             return Err(GeoTiffError::SizeMismatch("empty region"));
         }
-        self.decode_window(&info, x0, y0, x1, y1)
+        self.decode_window(&info, 0, x0, y0, x1, y1)
     }
 
     /// Reports the layout (size, tiling, sub-IFDs) of image `index` without
@@ -578,8 +598,8 @@ impl GeoTiff {
         }
 
         let samples_per_pixel = u16_tag(ifd.get(277).and_then(|e| e.as_u32(self.little)), 1)?;
-        if samples_per_pixel != 1 {
-            return Err(GeoTiffError::MultiSample(samples_per_pixel as usize));
+        if samples_per_pixel == 0 {
+            return Err(GeoTiffError::Unsupported("zero samples per pixel"));
         }
 
         let bits = u16_tag(
@@ -658,6 +678,7 @@ impl GeoTiff {
         Ok(ImageInfo {
             width,
             height,
+            samples_per_pixel,
             bits_per_sample: bits,
             sample_format,
             compression,
@@ -674,16 +695,17 @@ impl GeoTiff {
     }
 
     /// Decodes the complete image described by `info`.
-    fn decode_full(&self, info: &ImageInfo) -> Result<AnyBand> {
+    fn decode_full(&self, info: &ImageInfo, band: usize) -> Result<AnyBand> {
         let width = info.width as usize;
         let height = info.height as usize;
-        self.decode_window(info, 0, 0, width, height)
+        self.decode_window(info, band, 0, 0, width, height)
     }
 
-    /// Decodes a window `[x0, x1) x [y0, y1)` of the image.
+    /// Decodes band `band` of the sub-window `[x0, x1) x [y0, y1)` of the image.
     fn decode_window(
         &self,
         info: &ImageInfo,
+        band: usize,
         x0: usize,
         y0: usize,
         x1: usize,
@@ -692,6 +714,9 @@ impl GeoTiff {
         let bytes_per_sample = ((info.bits_per_sample as usize).div_ceil(8)).max(1);
         if info.bits_per_sample == 0 || info.bits_per_sample > 64 {
             return Err(GeoTiffError::Unsupported("bits per sample out of range"));
+        }
+        if band >= usize::from(info.samples_per_pixel) {
+            return Err(GeoTiffError::Unsupported("band index out of range"));
         }
         let width = info.width as usize;
         let height = info.height as usize;
@@ -748,22 +773,52 @@ impl GeoTiff {
                 if data_w == 0 || data_h == 0 {
                     continue;
                 }
+                // A chunk holds every sample of every pixel, interleaved.
+                let spp = usize::from(info.samples_per_pixel);
                 let expected = data_w
                     .checked_mul(data_h)
                     .and_then(|v| v.checked_mul(bytes_per_sample))
+                    .and_then(|v| v.checked_mul(spp))
                     .ok_or(GeoTiffError::SizeMismatch("tile dimensions overflow"))?;
                 if expected > MAX_DECODE_BYTES {
                     return Err(GeoTiffError::SizeMismatch("tile exceeds decode size limit"));
                 }
                 let mut decoded = decompress(&raw, info.compression, expected)?;
-                undo_predictor(
-                    info.predictor,
-                    &mut decoded,
-                    data_w,
-                    data_h,
-                    bytes_per_sample,
-                    self.little,
-                )?;
+                if decoded.len() < expected {
+                    return Err(GeoTiffError::SizeMismatch(
+                        "decoded chunk is shorter than declared",
+                    ));
+                }
+                // The floating-point predictor (3) works over each whole interleaved row,
+                // so it is undone before the bands are separated. The horizontal predictor
+                // (2) differences each band with its own neighbours, so it can run after.
+                let float_predictor_interleaved = spp > 1 && info.predictor == 3;
+                if float_predictor_interleaved {
+                    undo_float_predictor(
+                        &mut decoded,
+                        data_w * spp,
+                        data_h,
+                        bytes_per_sample,
+                        self.little,
+                        spp,
+                    )?;
+                }
+                // Keep only the requested band, so cell decoding below sees one channel.
+                let mut decoded = if spp == 1 {
+                    decoded
+                } else {
+                    extract_band(&decoded, data_w * data_h, spp, band, bytes_per_sample)
+                };
+                if !float_predictor_interleaved {
+                    undo_predictor(
+                        info.predictor,
+                        &mut decoded,
+                        data_w,
+                        data_h,
+                        bytes_per_sample,
+                        self.little,
+                    )?;
+                }
 
                 // Which columns/rows of this chunk fall inside the window.
                 let col_lo = x0.max(tx * chunk_w);
@@ -1099,14 +1154,27 @@ fn decode_zstd(raw: &[u8], expected: usize) -> Result<Vec<u8>> {
 /// output even when the stream is maliciously over-long.
 fn decode_deflate(raw: &[u8], expected: usize) -> Result<Vec<u8>> {
     use std::io::Read;
-    let decoder = flate2::read::DeflateDecoder::new(raw);
-    let mut limited = decoder.take((expected as u64).saturating_add(1));
+    // TIFF's Deflate (8) and Adobe Deflate (32946) streams are zlib-wrapped (RFC 1950).
+    // Some older writers emit a bare DEFLATE stream, so that is the fallback when no
+    // zlib header is present.
+    let limit = (expected as u64).saturating_add(1);
     let mut out = Vec::with_capacity(expected.min(1 << 20));
-    limited.read_to_end(&mut out).map_err(|_| GeoTiffError::Decompress("DEFLATE"))?;
+    let read = if is_zlib_header(raw) {
+        flate2::read::ZlibDecoder::new(raw).take(limit).read_to_end(&mut out)
+    } else {
+        flate2::read::DeflateDecoder::new(raw).take(limit).read_to_end(&mut out)
+    };
+    read.map_err(|_| GeoTiffError::Decompress("DEFLATE"))?;
     if out.len() > expected {
         return Err(GeoTiffError::SizeMismatch("DEFLATE output exceeds declared size"));
     }
     Ok(out)
+}
+
+/// Whether `raw` starts with a zlib header: compression method 8 and a header word that is
+/// a multiple of 31 (RFC 1950).
+fn is_zlib_header(raw: &[u8]) -> bool {
+    raw.len() >= 2 && raw[0] & 0x0F == 8 && (u16::from(raw[0]) << 8 | u16::from(raw[1])) % 31 == 0
 }
 
 /// Decodes a TIFF LZW stream (early-change variant) via `weezl`. The decoded length
@@ -1177,6 +1245,57 @@ fn write_uint(bytes: &mut [u8], value: u64, little: bool) {
     }
 }
 
+/// Copies one band out of pixel-interleaved chunk data, where each pixel holds `samples`
+/// samples of `bps` bytes. Returns the `pixels` samples of band `band`, in pixel order.
+fn extract_band(
+    interleaved: &[u8],
+    pixels: usize,
+    samples: usize,
+    band: usize,
+    bps: usize,
+) -> Vec<u8> {
+    let mut out = Vec::with_capacity(pixels * bps);
+    for p in 0..pixels {
+        let start = (p * samples + band) * bps;
+        out.extend_from_slice(&interleaved[start..start + bps]);
+    }
+    out
+}
+
+/// Reverses the floating-point predictor (TIFF Technical Note 3) over a `chunk_w x chunk_h`
+/// block of `bytes_per_sample`-byte samples. Each row is first running-summed at a lag of
+/// `lag` bytes (the samples per pixel for interleaved data, otherwise 1), then stored as byte
+/// planes: plane 0 holds the most significant byte of every sample, and so on.
+fn undo_float_predictor(
+    data: &mut [u8],
+    chunk_w: usize,
+    chunk_h: usize,
+    bytes_per_sample: usize,
+    little: bool,
+    lag: usize,
+) -> Result<()> {
+    let bps = bytes_per_sample;
+    let row_bytes = chunk_w * bps;
+    if bps == 0 || lag == 0 || data.len() < row_bytes * chunk_h {
+        return Err(GeoTiffError::SizeMismatch("predictor block too small"));
+    }
+    let mut planes = vec![0u8; row_bytes];
+    for row in 0..chunk_h {
+        let line = &mut data[row * row_bytes..(row + 1) * row_bytes];
+        for i in lag..line.len() {
+            line[i] = line[i].wrapping_add(line[i - lag]);
+        }
+        planes.copy_from_slice(line);
+        for count in 0..chunk_w {
+            for byte in 0..bps {
+                let plane = if little { bps - 1 - byte } else { byte };
+                line[count * bps + byte] = planes[plane * chunk_w + count];
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Reverses a TIFF horizontal (2) or floating-point (3) predictor over a
 /// `chunk_w x chunk_h` block of `bytes_per_sample`-byte samples, in file byte order.
 ///
@@ -1214,26 +1333,7 @@ fn undo_predictor(
             }
             Ok(())
         }
-        3 => {
-            // Floating-point predictor (TIFF Technical Note 3). Each row is first
-            // byte-wise running-summed, then stored as byte planes: plane 0 holds the
-            // most significant byte of every sample, and so on.
-            let mut planes = vec![0u8; row_bytes];
-            for row in 0..chunk_h {
-                let line = &mut data[row * row_bytes..(row + 1) * row_bytes];
-                for i in 1..line.len() {
-                    line[i] = line[i].wrapping_add(line[i - 1]);
-                }
-                planes.copy_from_slice(line);
-                for count in 0..chunk_w {
-                    for byte in 0..bps {
-                        let plane = if little { bps - 1 - byte } else { byte };
-                        line[count * bps + byte] = planes[plane * chunk_w + count];
-                    }
-                }
-            }
-            Ok(())
-        }
+        3 => undo_float_predictor(data, chunk_w, chunk_h, bps, little, 1),
         _ => Err(GeoTiffError::Unsupported("predictor scheme")),
     }
 }
@@ -1247,6 +1347,16 @@ fn undo_predictor(
 /// unsupported.
 pub fn read(data: &[u8]) -> Result<AnyBand> {
     GeoTiff::parse(data)?.read()
+}
+
+/// Reads band `band` (zero-based) of the first image of a (Geo)TIFF held in memory. For
+/// a single-band file only band 0 exists.
+///
+/// # Errors
+/// Returns [`GeoTiffError::Unsupported`] if `band` is out of range, or as [`read`]
+/// otherwise.
+pub fn read_band(data: &[u8], band: usize) -> Result<AnyBand> {
+    GeoTiff::parse(data)?.read_image_band(0, band)
 }
 
 #[cfg(feature = "std")]
@@ -1363,32 +1473,76 @@ const TAG_SAMPLE_FORMAT: u16 = 339;
 /// code is written as a projected CRS key. The output reads back through [`read`].
 ///
 /// # Errors
-/// Returns [`GeoTiffError::Unsupported`] if the raster is empty, the EPSG code does not
-/// fit in a GeoKey, or the file would exceed the 4 GiB limit of classic TIFF.
+/// As [`write_bands`].
 pub fn write(band: &AnyBand) -> Result<Vec<u8>> {
+    write_bands(&[band])
+}
+
+/// Encodes one or more bands as a single pixel-interleaved GeoTIFF, the layout GDAL
+/// writes for multi-band rasters. Every band must share the same size, cell type,
+/// transform, EPSG code and nodata value. The output reads back band by band through
+/// [`read_band`].
+///
+/// # Errors
+/// Returns [`GeoTiffError::Unsupported`] if no bands are given, the bands do not share
+/// one layout, a raster is empty, an EPSG code does not fit in a GeoKey, or the file would
+/// exceed the 4 GiB limit of classic TIFF.
+pub fn write_bands(bands: &[&AnyBand]) -> Result<Vec<u8>> {
     let too_large = || GeoTiffError::Unsupported("raster exceeds the 4 GiB limit of classic TIFF");
-    if band.width() == 0 || band.height() == 0 {
+    let first = *bands
+        .first()
+        .ok_or(GeoTiffError::Unsupported("at least one band is needed to write a GeoTIFF"))?;
+    if first.width() == 0 || first.height() == 0 {
         return Err(GeoTiffError::Unsupported("an empty raster has no TIFF representation"));
     }
-    let samples = samples_of_band(band);
-    let data_len = u32::try_from(samples.bytes.len()).map_err(|_| too_large())?;
-    let width = u32::try_from(band.width()).map_err(|_| too_large())?;
-    let height = u32::try_from(band.height()).map_err(|_| too_large())?;
-    let gt = band.transform();
+    let count = u16::try_from(bands.len())
+        .map_err(|_| GeoTiffError::Unsupported("too many bands for one GeoTIFF"))?;
+    let samples: Vec<Samples> = bands.iter().map(|band| samples_of_band(band)).collect();
+    let uniform = bands.iter().zip(&samples).all(|(band, s)| {
+        band.width() == first.width()
+            && band.height() == first.height()
+            && band.kind() == first.kind()
+            && band.transform().to_gdal() == first.transform().to_gdal()
+            && band.epsg() == first.epsg()
+            && s.nodata == samples[0].nodata
+    });
+    if !uniform {
+        return Err(GeoTiffError::Unsupported(
+            "bands must share size, cell type, transform, EPSG code and nodata",
+        ));
+    }
+
+    // Interleave the bands pixel by pixel: band 0's sample, band 1's sample, and so on.
+    let bps = usize::from(samples[0].bits) / 8;
+    let pixel_count = first.width() * first.height();
+    let mut pixels = Vec::with_capacity(pixel_count * samples.len() * bps);
+    for p in 0..pixel_count {
+        for s in &samples {
+            pixels.extend_from_slice(&s.bytes[p * bps..(p + 1) * bps]);
+        }
+    }
+
+    let data_len = u32::try_from(pixels.len()).map_err(|_| too_large())?;
+    let width = u32::try_from(first.width()).map_err(|_| too_large())?;
+    let height = u32::try_from(first.height()).map_err(|_| too_large())?;
+    let gt = first.transform();
+    let photometric = if count == 3 && samples[0].bits == 8 { 2 } else { 1 };
+    let bits = vec![samples[0].bits; usize::from(count)];
+    let formats = vec![samples[0].format; usize::from(count)];
 
     let mut fields = vec![
         Field::new(TAG_IMAGE_WIDTH, TYPE_LONG, longs(&[width])),
         Field::new(TAG_IMAGE_LENGTH, TYPE_LONG, longs(&[height])),
-        Field::new(TAG_BITS_PER_SAMPLE, TYPE_SHORT, shorts(&[samples.bits])),
+        Field::new(TAG_BITS_PER_SAMPLE, TYPE_SHORT, shorts(&bits)),
         Field::new(TAG_COMPRESSION, TYPE_SHORT, shorts(&[COMPRESSION_NONE])),
-        Field::new(TAG_PHOTOMETRIC, TYPE_SHORT, shorts(&[1])),
+        Field::new(TAG_PHOTOMETRIC, TYPE_SHORT, shorts(&[photometric])),
         // The pixel data starts right after the 8-byte file header.
         Field::new(TAG_STRIP_OFFSETS, TYPE_LONG, longs(&[8])),
-        Field::new(TAG_SAMPLES_PER_PIXEL, TYPE_SHORT, shorts(&[1])),
+        Field::new(TAG_SAMPLES_PER_PIXEL, TYPE_SHORT, shorts(&[count])),
         Field::new(TAG_ROWS_PER_STRIP, TYPE_LONG, longs(&[height])),
         Field::new(TAG_STRIP_BYTE_COUNTS, TYPE_LONG, longs(&[data_len])),
         Field::new(TAG_PLANAR_CONFIG, TYPE_SHORT, shorts(&[1])),
-        Field::new(TAG_SAMPLE_FORMAT, TYPE_SHORT, shorts(&[samples.format])),
+        Field::new(TAG_SAMPLE_FORMAT, TYPE_SHORT, shorts(&formats)),
         Field::new(
             TAG_MODEL_PIXEL_SCALE,
             TYPE_DOUBLE,
@@ -1400,7 +1554,7 @@ pub fn write(band: &AnyBand) -> Result<Vec<u8>> {
             doubles(&[0.0, 0.0, 0.0, gt.origin_x(), gt.origin_y(), 0.0]),
         ),
     ];
-    if let Some(code) = band.epsg() {
+    if let Some(code) = first.epsg() {
         let code = u16::try_from(code)
             .map_err(|_| GeoTiffError::Unsupported("EPSG code does not fit in a GeoKey"))?;
         let geographic = (4000..5000).contains(&code);
@@ -1428,18 +1582,18 @@ pub fn write(band: &AnyBand) -> Result<Vec<u8>> {
         ]);
         fields.push(Field::new(TAG_GEO_KEY_DIRECTORY, TYPE_SHORT, keys));
     }
-    if let Some(text) = &samples.nodata {
+    if let Some(text) = &samples[0].nodata {
         let mut bytes = text.clone().into_bytes();
         bytes.push(0);
         fields.push(Field::new(TAG_GDAL_NODATA, TYPE_ASCII, bytes));
     }
     fields.sort_by_key(|field| field.tag);
 
-    let mut out = Vec::with_capacity(8 + samples.bytes.len() + 512);
+    let mut out = Vec::with_capacity(8 + pixels.len() + 512);
     out.extend_from_slice(b"II");
     out.extend_from_slice(&42u16.to_le_bytes());
     out.extend_from_slice(&[0; 4]); // IFD offset, patched once the layout is known
-    out.extend_from_slice(&samples.bytes);
+    out.extend_from_slice(&pixels);
     pad_to_word(&mut out);
     for field in &mut fields {
         if field.payload.len() > 4 {
@@ -1629,6 +1783,65 @@ mod write_tests {
         assert!(ifd > 12);
     }
 
+    fn gt_small() -> GeoTransform {
+        GeoTransform::new(0.0, 0.0, 1.0, 1.0)
+    }
+
+    #[test]
+    fn multi_band_u8_round_trips_band_by_band() {
+        let r =
+            AnyBand::U8(Band::new(Grid::new(3, 2, vec![1u8, 2, 3, 4, 5, 6]).unwrap(), gt_small()));
+        let g = AnyBand::U8(Band::new(
+            Grid::new(3, 2, vec![10u8, 20, 30, 40, 50, 60]).unwrap(),
+            gt_small(),
+        ));
+        let b = AnyBand::U8(Band::new(
+            Grid::new(3, 2, vec![100u8, 110, 120, 130, 140, 150]).unwrap(),
+            gt_small(),
+        ));
+        let bytes = write_bands(&[&r, &g, &b]).unwrap();
+
+        let tiff = GeoTiff::parse(&bytes).unwrap();
+        assert_eq!(tiff.band_count(0).unwrap(), 3);
+        assert_eq!(values(&read_band(&bytes, 0).unwrap()), values(&r));
+        assert_eq!(values(&read_band(&bytes, 1).unwrap()), values(&g));
+        assert_eq!(values(&read_band(&bytes, 2).unwrap()), values(&b));
+        // `read` keeps returning the first band.
+        assert_eq!(values(&read(&bytes).unwrap()), values(&r));
+        assert!(matches!(
+            read_band(&bytes, 3),
+            Err(GeoTiffError::Unsupported("band index out of range"))
+        ));
+    }
+
+    #[test]
+    fn multi_band_u16_keeps_each_band_and_its_nodata() {
+        let a = AnyBand::U16(
+            Band::new(Grid::new(2, 2, vec![0u16, 1, 2, 65_535]).unwrap(), gt_small())
+                .with_nodata(0),
+        );
+        let b = AnyBand::U16(
+            Band::new(Grid::new(2, 2, vec![7u16, 8, 9, 10]).unwrap(), gt_small()).with_nodata(0),
+        );
+        let bytes = write_bands(&[&a, &b]).unwrap();
+        let second = read_band(&bytes, 1).unwrap();
+        assert_eq!(values(&second), values(&b));
+        match second {
+            AnyBand::U16(band) => assert_eq!(band.nodata(), Some(&0)),
+            _ => panic!("wrong kind read back"),
+        }
+    }
+
+    #[test]
+    fn write_bands_refuses_mismatched_or_empty_input() {
+        let a = AnyBand::U8(Band::new(Grid::new(2, 1, vec![1u8, 2]).unwrap(), gt_small()));
+        let wide = AnyBand::U8(Band::new(Grid::new(3, 1, vec![1u8, 2, 3]).unwrap(), gt_small()));
+        let float = AnyBand::F32(Band::new(Grid::new(2, 1, vec![1f32, 2.0]).unwrap(), gt_small()));
+        assert!(matches!(write_bands(&[&a, &wide]), Err(GeoTiffError::Unsupported(_))));
+        assert!(matches!(write_bands(&[&a, &float]), Err(GeoTiffError::Unsupported(_))));
+        assert!(matches!(write_bands(&[]), Err(GeoTiffError::Unsupported(_))));
+    }
+
     #[test]
     fn empty_rasters_are_refused() {
         let band = Band::new(Grid::<u8>::new(0, 0, Vec::new()).unwrap(), gt());
@@ -1735,10 +1948,11 @@ pub mod testsupport {
         out
     }
 
+    /// A zlib-wrapped stream, as TIFF's Deflate compression requires.
     fn deflate_encode(data: &[u8]) -> Vec<u8> {
         use std::io::Write;
         let mut encoder =
-            flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
+            flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
         encoder.write_all(data).unwrap();
         encoder.finish().unwrap()
     }
@@ -1958,6 +2172,35 @@ pub mod testsupport {
 mod tests {
     use super::*;
     use crate::cell::CellKind;
+
+    /// A zlib-wrapped stream, as TIFF's Deflate compression requires.
+    fn zlib_encode(data: &[u8]) -> Vec<u8> {
+        use std::io::Write;
+        let mut encoder =
+            flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(data).unwrap();
+        encoder.finish().unwrap()
+    }
+    /// A bare DEFLATE stream with no zlib header, which some older writers produced.
+    fn raw_deflate_encode(data: &[u8]) -> Vec<u8> {
+        use std::io::Write;
+        let mut encoder =
+            flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(data).unwrap();
+        encoder.finish().unwrap()
+    }
+
+    #[test]
+    fn deflate_accepts_zlib_wrapped_and_bare_streams() {
+        let data = b"tpt-gis deflate fixture ".repeat(4);
+        let zlib = zlib_encode(&data);
+        assert!(is_zlib_header(&zlib));
+        assert_eq!(decode_deflate(&zlib, data.len()).unwrap(), data);
+
+        let bare = raw_deflate_encode(&data);
+        assert!(!is_zlib_header(&bare));
+        assert_eq!(decode_deflate(&bare, data.len()).unwrap(), data);
+    }
 
     /// Byte offset of the 12-byte IFD entry carrying `tag` in a little-endian fixture
     /// built by `make_uncompressed_tiff`.
@@ -2281,5 +2524,54 @@ mod tests {
         }
         let tiff = GeoTiff::parse(&bytes).unwrap();
         assert!(tiff.read_image(0).is_err());
+    }
+}
+
+#[cfg(test)]
+mod float_predictor_tests {
+    use super::*;
+
+    /// The forward floating-point predictor (TIFF Technical Note 3), the inverse of
+    /// `undo_float_predictor`: byte planes first, then a running difference at `lag`.
+    fn float_predictor_encode(
+        data: &[u8],
+        row_samples: usize,
+        rows: usize,
+        bps: usize,
+        lag: usize,
+    ) -> Vec<u8> {
+        let row_bytes = row_samples * bps;
+        let mut out = vec![0u8; data.len()];
+        for row in 0..rows {
+            let src = &data[row * row_bytes..(row + 1) * row_bytes];
+            let mut planes = vec![0u8; row_bytes];
+            for count in 0..row_samples {
+                for byte in 0..bps {
+                    planes[(bps - 1 - byte) * row_samples + count] = src[count * bps + byte];
+                }
+            }
+            let dst = &mut out[row * row_bytes..(row + 1) * row_bytes];
+            for i in 0..row_bytes {
+                dst[i] = if i >= lag { planes[i].wrapping_sub(planes[i - lag]) } else { planes[i] };
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn interleaved_float_predictor_differences_at_a_lag_of_samples_per_pixel() {
+        let (width, rows, spp) = (3usize, 2usize, 2usize);
+        let row_samples = width * spp;
+        let values: Vec<f32> = (0..row_samples * rows).map(|i| i as f32 * 0.37 - 2.5).collect();
+        let original: Vec<u8> = values.iter().flat_map(|v| v.to_le_bytes()).collect();
+
+        let mut encoded = float_predictor_encode(&original, row_samples, rows, 4, spp);
+        undo_float_predictor(&mut encoded, row_samples, rows, 4, true, spp).unwrap();
+        assert_eq!(encoded, original);
+
+        // A lag of 1 gives different bytes, so the test really exercises the lag.
+        let mut wrong = float_predictor_encode(&original, row_samples, rows, 4, spp);
+        undo_float_predictor(&mut wrong, row_samples, rows, 4, true, 1).unwrap();
+        assert_ne!(wrong, original);
     }
 }
