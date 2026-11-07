@@ -211,8 +211,9 @@ struct RawFeature {
     #[serde(rename = "type")]
     type_: String,
     geometry: Option<Value>,
+    /// Missing or `null` properties both mean "no properties".
     #[serde(default)]
-    properties: Map<String, Value>,
+    properties: Option<Map<String, Value>>,
 }
 
 /// A GeoJSON `Feature`: a geometry plus a JSON object of arbitrary properties.
@@ -237,10 +238,29 @@ pub fn parse_feature_collection(json: &str) -> Result<FeatureCollection, GeoJson
     let obj = value
         .as_object()
         .ok_or_else(|| GeoJsonError::InvalidGeometry("expected a JSON object".into()))?;
-    let type_ = obj.get("type").and_then(Value::as_str);
-    if type_ != Some("FeatureCollection") {
+    let type_ = obj.get("type").and_then(Value::as_str).unwrap_or("");
+    // A bare geometry or Feature is accepted and read as a one-feature collection.
+    match type_ {
+        "Feature" => {
+            let raw: RawFeature = serde_json::from_value(value.clone())?;
+            let feature = Feature {
+                geometry: raw.geometry.map(|g| geometry_from_value(&g, 0)).transpose()?,
+                properties: raw.properties.unwrap_or_default(),
+            };
+            return Ok(FeatureCollection { features: vec![feature] });
+        }
+        "Point" | "LineString" | "Polygon" | "MultiPoint" | "MultiLineString" | "MultiPolygon"
+        | "GeometryCollection" => {
+            let geometry = geometry_from_value(&value, 0)?;
+            return Ok(FeatureCollection {
+                features: vec![Feature { geometry: Some(geometry), properties: Map::new() }],
+            });
+        }
+        _ => {}
+    }
+    if type_ != "FeatureCollection" {
         return Err(GeoJsonError::InvalidGeometry(
-            "expected \"type\": \"FeatureCollection\"".into(),
+            "expected \"type\": \"FeatureCollection\", \"Feature\", or a geometry type".into(),
         ));
     }
     let raw_features: Vec<RawFeature> = serde_json::from_value(
@@ -254,7 +274,7 @@ pub fn parse_feature_collection(json: &str) -> Result<FeatureCollection, GeoJson
         .map(|raw| {
             Ok(Feature {
                 geometry: raw.geometry.map(|g| geometry_from_value(&g, 0)).transpose()?,
-                properties: raw.properties,
+                properties: raw.properties.unwrap_or_default(),
             })
         })
         .collect::<Result<Vec<_>, GeoJsonError>>()?;
@@ -401,5 +421,42 @@ mod tests {
             json.push('}');
         }
         assert!(matches!(parse_geometry(&json), Err(GeoJsonError::MaxNestingDepth)));
+    }
+
+    /// A bare Feature is read as a one-feature collection.
+    #[test]
+    fn accepts_a_bare_feature() {
+        let fc = parse_feature_collection(
+            r#"{"type":"Feature","properties":{"name":"a"},"geometry":{"type":"Point","coordinates":[1,2]}}"#,
+        )
+        .unwrap();
+        assert_eq!(fc.features.len(), 1);
+        assert_eq!(fc.features[0].geometry, Some(Geometry::Point(Point::new(1.0, 2.0))));
+    }
+
+    /// A bare geometry object is read as a one-feature collection with no properties.
+    #[test]
+    fn accepts_a_bare_geometry() {
+        let fc = parse_feature_collection(r#"{"type":"LineString","coordinates":[[0,0],[1,1]]}"#)
+            .unwrap();
+        assert_eq!(fc.features.len(), 1);
+        assert!(fc.features[0].properties.is_empty());
+    }
+
+    /// `properties: null` and a missing `properties` both mean no properties.
+    #[test]
+    fn null_or_missing_properties_are_empty() {
+        let fc = parse_feature_collection(
+            r#"{"type":"FeatureCollection","features":[
+                {"type":"Feature","properties":null,"geometry":{"type":"Point","coordinates":[1,2]}},
+                {"type":"Feature","geometry":{"type":"Point","coordinates":[3,4]}}]}"#,
+        )
+        .unwrap();
+        assert!(fc.features.iter().all(|f| f.properties.is_empty()));
+    }
+
+    #[test]
+    fn rejects_unknown_top_level_type() {
+        assert!(parse_feature_collection(r#"{"type":"Topology"}"#).is_err());
     }
 }

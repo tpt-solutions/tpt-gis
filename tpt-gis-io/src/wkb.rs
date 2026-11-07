@@ -171,11 +171,33 @@ const MAX_NESTING_DEPTH: u32 = 32;
 struct Reader<'a> {
     bytes: &'a [u8],
     pos: usize,
+    /// Ordinates per coordinate beyond x and y (Z and/or M) for the geometry being read.
+    /// They are read and discarded: the geometry model is two-dimensional.
+    extra: usize,
+}
+
+/// Decodes a WKB type code into `(base type, extra ordinates, has SRID)`.
+///
+/// Accepts ISO codes (`1001` = PointZ, `2001` = PointM, `3001` = PointZM) and the
+/// PostGIS EWKB flags in the high bits (`0x80000000` Z, `0x40000000` M, `0x20000000`
+/// SRID). Anything else is returned as an unknown base type.
+fn decode_type_code(code: u32) -> (u32, usize, bool) {
+    if code & 0xE000_0000 != 0 {
+        let extra = usize::from(code & 0x8000_0000 != 0) + usize::from(code & 0x4000_0000 != 0);
+        (code & 0x1FFF_FFFF, extra, code & 0x2000_0000 != 0)
+    } else {
+        let extra = match code / 1000 {
+            1 | 2 => 1,
+            3 => 2,
+            _ => 0,
+        };
+        (code % 1000, extra, false)
+    }
 }
 
 impl<'a> Reader<'a> {
     fn new(bytes: &'a [u8]) -> Self {
-        Self { bytes, pos: 0 }
+        Self { bytes, pos: 0, extra: 0 }
     }
 
     fn remaining_len(&self) -> usize {
@@ -212,6 +234,9 @@ impl<'a> Reader<'a> {
     fn read_point(&mut self, order: ByteOrder) -> Result<Point, WkbError> {
         let x = self.read_f64(order)?;
         let y = self.read_f64(order)?;
+        for _ in 0..self.extra {
+            self.read_f64(order)?;
+        }
         if !x.is_finite() || !y.is_finite() {
             return Err(WkbError::NonFiniteCoordinate);
         }
@@ -281,7 +306,12 @@ impl<'a> Reader<'a> {
         }
         let order = ByteOrder::from_marker(self.read_u8()?)?;
         let type_code = self.read_u32(order)?;
-        match type_code {
+        let (base, extra, has_srid) = decode_type_code(type_code);
+        self.extra = extra;
+        if has_srid {
+            let _srid = self.read_u32(order)?;
+        }
+        match base {
             geom_type::POINT => Ok(Geometry::Point(self.read_point(order)?)),
             geom_type::LINE_STRING => Ok(Geometry::LineString(self.read_points(order)?)),
             geom_type::POLYGON => Ok(Geometry::Polygon(self.read_polygon(order)?)),
@@ -677,5 +707,46 @@ mod tests {
             }
         }
         assert!(matches!(parse_geometry(&inner), Err(WkbError::MaxNestingDepth)));
+    }
+
+    fn point_bytes(code: u32, coords: &[f64], srid: Option<u32>) -> Vec<u8> {
+        let mut out = vec![1u8];
+        out.extend_from_slice(&code.to_le_bytes());
+        if let Some(srid) = srid {
+            out.extend_from_slice(&srid.to_le_bytes());
+        }
+        for c in coords {
+            out.extend_from_slice(&c.to_le_bytes());
+        }
+        out
+    }
+
+    /// ISO codes: 1001 is PointZ and 2001 is PointM. The extra ordinate is dropped.
+    #[test]
+    fn accepts_iso_z_and_m_point_codes() {
+        let z = parse_geometry(&point_bytes(1001, &[1.0, 2.0, 3.0], None)).unwrap();
+        assert_eq!(z, Geometry::Point(Point::new(1.0, 2.0)));
+        let m = parse_geometry(&point_bytes(2001, &[1.0, 2.0, 9.0], None)).unwrap();
+        assert_eq!(m, Geometry::Point(Point::new(1.0, 2.0)));
+    }
+
+    /// PostGIS EWKB: the Z flag (0x80000000), with an SRID (0x20000000) that is skipped.
+    #[test]
+    fn accepts_ewkb_flags_with_srid() {
+        let code = 0x8000_0001 | 0x2000_0000;
+        let g = parse_geometry(&point_bytes(code, &[30.0, 10.0, 5.0], Some(4326))).unwrap();
+        assert_eq!(g, Geometry::Point(Point::new(30.0, 10.0)));
+    }
+
+    #[test]
+    fn accepts_iso_zm_linestring() {
+        let mut out = vec![1u8];
+        out.extend_from_slice(&3002u32.to_le_bytes()); // LineStringZM... base 2, ZM
+        out.extend_from_slice(&2u32.to_le_bytes());
+        for v in [0.0f64, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0] {
+            out.extend_from_slice(&v.to_le_bytes());
+        }
+        let g = parse_geometry(&out).unwrap();
+        assert_eq!(g, Geometry::LineString(vec![Point::new(0.0, 0.0), Point::new(3.0, 4.0)]));
     }
 }

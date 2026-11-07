@@ -76,11 +76,14 @@ const MAX_NESTING_DEPTH: u32 = 32;
 struct Parser {
     chars: Vec<char>,
     pos: usize,
+    /// Ordinates beyond x and y for the current geometry (1 for `Z` or `M`, 2 for
+    /// `ZM`). They are read and discarded, since the model is two-dimensional.
+    extra: usize,
 }
 
 impl Parser {
     fn new(input: &str) -> Self {
-        Self { chars: input.chars().collect(), pos: 0 }
+        Self { chars: input.chars().collect(), pos: 0, extra: 0 }
     }
 
     fn peek(&self) -> Option<char> {
@@ -259,6 +262,9 @@ fn parse_list<T>(
 fn parse_coord(p: &mut Parser) -> Result<Point, WktError> {
     let x = p.read_number()?;
     let y = p.read_number()?;
+    for _ in 0..p.extra {
+        p.read_number()?;
+    }
     if !x.is_finite() || !y.is_finite() {
         return Err(WktError::NonFiniteCoordinate);
     }
@@ -295,6 +301,21 @@ fn parse_tagged_geometry(p: &mut Parser, depth: u32) -> Result<Geometry, WktErro
         return Err(WktError::MaxNestingDepth);
     }
     let keyword = p.read_word()?;
+    // An optional dimension tag: `POINT Z (...)`, `POINT M (...)`, or `POINT ZM (...)`.
+    p.extra = 0;
+    p.skip_whitespace();
+    if matches!(p.peek(), Some(c) if c.is_ascii_alphabetic()) {
+        p.extra = match p.read_word()?.to_ascii_uppercase().as_str() {
+            "Z" | "M" => 1,
+            "ZM" => 2,
+            "EMPTY" => {
+                return Err(WktError::EmptyGeometryUnsupported(keyword.to_ascii_uppercase()));
+            }
+            other => {
+                return Err(WktError::UnexpectedToken(format!("unknown dimension tag {other:?}")));
+            }
+        };
+    }
     match keyword.to_ascii_uppercase().as_str() {
         "POINT" => {
             expect_open_paren(p, "POINT")?;
@@ -367,7 +388,19 @@ fn parse_tagged_geometry(p: &mut Parser, depth: u32) -> Result<Geometry, WktErro
 /// geometry keyword, uses `EMPTY`, or has trailing content after a complete
 /// geometry.
 pub fn parse_geometry(wkt: &str) -> Result<Geometry, WktError> {
-    let mut parser = Parser::new(wkt);
+    // EWKT prefixes the geometry with its SRID. The SRID is not part of the geometry.
+    let trimmed = wkt.trim_start();
+    let body = if trimmed.len() >= 5 && trimmed[..5].eq_ignore_ascii_case("SRID=") {
+        match trimmed.find(';') {
+            Some(i) => &trimmed[i + 1..],
+            None => {
+                return Err(WktError::UnexpectedToken("expected ';' after SRID=".to_string()));
+            }
+        }
+    } else {
+        wkt
+    };
+    let mut parser = Parser::new(body);
     let geometry = parse_tagged_geometry(&mut parser, 0)?;
     parser.skip_whitespace();
     if !parser.eof() {
@@ -809,5 +842,41 @@ mod tests {
             wkt.push(')');
         }
         assert!(matches!(parse_geometry(&wkt), Err(WktError::MaxNestingDepth)));
+    }
+
+    /// Z and M ordinates are read and dropped; the model is two-dimensional.
+    #[test]
+    fn accepts_dimension_tags_and_drops_extra_ordinates() {
+        assert_eq!(
+            parse_geometry("POINT Z (1 2 3)").unwrap(),
+            Geometry::Point(Point::new(1.0, 2.0))
+        );
+        assert_eq!(
+            parse_geometry("POINT M (1 2 9)").unwrap(),
+            Geometry::Point(Point::new(1.0, 2.0))
+        );
+        assert_eq!(
+            parse_geometry("LINESTRING ZM (0 0 1 2, 3 4 5 6)").unwrap(),
+            Geometry::LineString(vec![Point::new(0.0, 0.0), Point::new(3.0, 4.0)])
+        );
+        assert!(matches!(
+            parse_geometry("POLYGON Z ((0 0 1, 1 0 1, 1 1 1, 0 0 1))").unwrap(),
+            Geometry::Polygon(_)
+        ));
+    }
+
+    /// An EWKT `SRID=` prefix is accepted and ignored.
+    #[test]
+    fn accepts_ewkt_srid_prefix() {
+        assert_eq!(
+            parse_geometry("SRID=4326;POINT (30 10)").unwrap(),
+            Geometry::Point(Point::new(30.0, 10.0))
+        );
+        assert!(parse_geometry("SRID=4326 POINT (30 10)").is_err());
+    }
+
+    #[test]
+    fn rejects_unknown_dimension_tag() {
+        assert!(parse_geometry("POINT Q (1 2)").is_err());
     }
 }
