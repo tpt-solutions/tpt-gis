@@ -22,5 +22,6 @@ Repository = "https://github.com/tpt-solutions/tpt-gis"
 Homepage = "https://github.com/tpt-solutions/tpt-gis"
 
 [tool.maturin]
-module-name = "tpt_gis_py"
+module-name = "tpt_gis_py._core"
+python-source = "python"
 features = ["pyo3/extension-module"]

@@ -286,9 +286,9 @@ fn read_shapefile_attributes(path: &str) -> PyResult<PyObject> {
     })
 }
 
-/// The `tpt_gis_py` extension module.
+/// The native extension module, `tpt_gis_py._core`. The `tpt_gis_py` package re-exports it.
 #[pymodule]
-fn tpt_gis_py(m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Geometry>()?;
     m.add_class::<Point>()?;
     m.add_class::<GeoPoint>()?;

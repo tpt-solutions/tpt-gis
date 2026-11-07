@@ -86,13 +86,15 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install maturin pytest
+      - run: pip install maturin pytest mypy
       - name: Build & install the extension into a venv
         working-directory: bindings/tpt-gis-py
         run: maturin develop
       - name: Run the pytest suite
         working-directory: bindings/tpt-gis-py
         run: pytest -v
+      - name: Check the type stubs against the extension
+        run: python -m mypy.stubtest tpt_gis_py._core
 
 
   publish-python:
