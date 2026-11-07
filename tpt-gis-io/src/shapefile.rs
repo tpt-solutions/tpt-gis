@@ -216,9 +216,16 @@ fn parse_polyline_record(cursor: &mut Cursor<'_>) -> Result<Geometry, ShapefileE
 /// See the module-level doc comment for the scope limitation this function
 /// implements: ring 0 is always treated as the exterior, and every other ring as a
 /// hole, with no winding-order-based detection of multiple disjoint exteriors.
-fn parse_polygon_record(cursor: &mut Cursor<'_>) -> Result<Geometry, ShapefileError> {
+///
+/// A polygon record with zero parts carries no geometry and yields `None`, like a
+/// `Null Shape`; returning a `Polygon` with no rings would make downstream code that
+/// indexes `rings[0]` panic.
+fn parse_polygon_record(cursor: &mut Cursor<'_>) -> Result<Option<Geometry>, ShapefileError> {
     let rings = read_parts_and_points(cursor)?;
-    Ok(Geometry::Polygon(Polygon { rings }))
+    if rings.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(Geometry::Polygon(Polygon { rings })))
 }
 
 /// Parses a `MultiPoint` (shape type `8`) record's content (after its own 4-byte shape
@@ -292,7 +299,7 @@ pub fn read_shp(bytes: &[u8]) -> Result<Vec<Geometry>, ShapefileError> {
             shape_type::NULL => None,
             shape_type::POINT => Some(Geometry::Point(read_xy(&mut record)?)),
             shape_type::POLYLINE => Some(parse_polyline_record(&mut record)?),
-            shape_type::POLYGON => Some(parse_polygon_record(&mut record)?),
+            shape_type::POLYGON => parse_polygon_record(&mut record)?,
             shape_type::MULTIPOINT => Some(parse_multipoint_record(&mut record)?),
             other => return Err(ShapefileError::UnsupportedShapeType(other)),
         };
@@ -514,6 +521,8 @@ pub fn read_dbf(bytes: &[u8]) -> Result<Vec<DbfRecord>, ShapefileError> {
 pub struct ShpGeometryIter<'a> {
     cursor: Cursor<'a>,
     finished: bool,
+    /// A header error found by [`ShpGeometryIter::new`], reported on the first `next`.
+    header_error: Option<ShapefileError>,
 }
 
 impl<'a> ShpGeometryIter<'a> {
@@ -521,9 +530,8 @@ impl<'a> ShpGeometryIter<'a> {
     #[must_use]
     pub fn new(bytes: &'a [u8]) -> Self {
         let mut cursor = Cursor::new(bytes);
-        let finished = false;
-        let _ = skip_shp_header(&mut cursor);
-        Self { cursor, finished }
+        let header_error = skip_shp_header(&mut cursor).err();
+        Self { cursor, finished: false, header_error }
     }
 }
 
@@ -531,6 +539,10 @@ impl<'a> Iterator for ShpGeometryIter<'a> {
     type Item = Result<Geometry, ShapefileError>;
 
     fn next(&mut self) -> Option<Self::Item> {
+        if let Some(err) = self.header_error.take() {
+            self.finished = true;
+            return Some(Err(err));
+        }
         loop {
             if self.finished || self.cursor.is_at_end() {
                 return None;
@@ -582,7 +594,7 @@ fn read_next_shp_record(cursor: &mut Cursor<'_>) -> Result<Option<Geometry>, Sha
         shape_type::NULL => None,
         shape_type::POINT => Some(Geometry::Point(read_xy(&mut record)?)),
         shape_type::POLYLINE => Some(parse_polyline_record(&mut record)?),
-        shape_type::POLYGON => Some(parse_polygon_record(&mut record)?),
+        shape_type::POLYGON => parse_polygon_record(&mut record)?,
         shape_type::MULTIPOINT => Some(parse_multipoint_record(&mut record)?),
         other => return Err(ShapefileError::UnsupportedShapeType(other)),
     };
@@ -771,6 +783,37 @@ mod tests {
 
         let result = read_shp(&bytes);
         assert!(matches!(result, Err(ShapefileError::UnexpectedEndOfInput)));
+    }
+
+    #[test]
+    fn zero_part_polygon_is_empty_not_a_ringless_polygon() {
+        let mut bytes = shp_header(5);
+        let mut content = Vec::new();
+        content.extend_from_slice(&5i32.to_le_bytes()); // shape type POLYGON
+        content.extend_from_slice(&[0u8; 32]); // bounding box
+        content.extend_from_slice(&0i32.to_le_bytes()); // NumParts
+        content.extend_from_slice(&0i32.to_le_bytes()); // NumPoints
+        push_record(&mut bytes, 1, &content);
+
+        let geometries = read_shp(&bytes).unwrap();
+        assert!(geometries.is_empty(), "got {geometries:?}");
+    }
+
+    #[test]
+    fn shp_geometry_iter_reports_bad_header() {
+        // Wrong file code: the iterator must surface the header error, not parse the
+        // remaining bytes as records.
+        let mut bytes = shp_header(1);
+        bytes[3] = 0x00;
+        let mut content = Vec::new();
+        content.extend_from_slice(&1i32.to_le_bytes());
+        content.extend_from_slice(&1.0f64.to_le_bytes());
+        content.extend_from_slice(&2.0f64.to_le_bytes());
+        push_record(&mut bytes, 1, &content);
+
+        let mut iter = ShpGeometryIter::new(&bytes);
+        assert!(matches!(iter.next(), Some(Err(ShapefileError::InvalidFileCode(_)))));
+        assert!(iter.next().is_none());
     }
 
     #[test]

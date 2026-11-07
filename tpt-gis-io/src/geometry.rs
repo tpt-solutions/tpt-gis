@@ -26,19 +26,17 @@ impl Polygon {
         Self { rings: vec![exterior] }
     }
 
-    /// The exterior (outer boundary) ring.
-    ///
-    /// # Panics
-    /// Panics if `rings` is empty — a valid `Polygon` always has at least one ring.
+    /// The exterior (outer boundary) ring. Empty if the polygon has no rings (such a
+    /// polygon has no area and contains nothing).
     #[must_use]
     pub fn exterior(&self) -> &[Point] {
-        &self.rings[0]
+        self.rings.first().map_or(&[], Vec::as_slice)
     }
 
     /// Interior (hole) rings, if any.
     #[must_use]
     pub fn interiors(&self) -> &[Vec<Point>] {
-        &self.rings[1..]
+        self.rings.get(1..).unwrap_or(&[])
     }
 
     /// Borrows this polygon as a `tpt_gis_geom::Polygon` for use with that crate's

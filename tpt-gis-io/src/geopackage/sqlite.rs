@@ -83,7 +83,17 @@ enum SqliteErrorKind {
     /// A b-tree page was neither a leaf nor interior table page (e.g. an index page),
     /// which this reader does not walk.
     UnsupportedPageType(u8),
+    /// A b-tree page number was 0, which SQLite never uses.
+    InvalidPageNumber,
+    /// The b-tree was nested deeper than [`MAX_BTREE_DEPTH`], which indicates a cycle
+    /// or a corrupt file.
+    BTreeTooDeep,
 }
+
+/// The deepest b-tree this reader will descend. Real GeoPackage tables are only a few
+/// levels deep; the bound stops a cyclic or hostile page graph from recursing until
+/// the stack overflows.
+const MAX_BTREE_DEPTH: usize = 32;
 
 impl SqliteError {
     fn new(kind: SqliteErrorKind) -> Self {
@@ -98,6 +108,10 @@ impl fmt::Display for SqliteError {
             SqliteErrorKind::UnsupportedPageSize(ps) => write!(f, "unsupported page size {ps}"),
             SqliteErrorKind::UnexpectedEndOfInput => write!(f, "unexpected end of SQLite input"),
             SqliteErrorKind::OffsetOverflow => write!(f, "SQLite offset computation overflowed"),
+            SqliteErrorKind::InvalidPageNumber => write!(f, "SQLite page number 0 is invalid"),
+            SqliteErrorKind::BTreeTooDeep => {
+                write!(f, "SQLite b-tree exceeds maximum depth (cycle or corrupt file)")
+            }
             SqliteErrorKind::TruncatedOverflow => {
                 write!(f, "overflow-page payload was truncated")
             }
@@ -133,15 +147,27 @@ pub struct DbInfo {
 }
 
 fn be_u16(bytes: &[u8], pos: usize) -> Result<u16, SqliteError> {
-    let slice =
-        bytes.get(pos..pos + 2).ok_or(SqliteError::new(SqliteErrorKind::UnexpectedEndOfInput))?;
+    let slice = pos
+        .checked_add(2)
+        .and_then(|end| bytes.get(pos..end))
+        .ok_or(SqliteError::new(SqliteErrorKind::UnexpectedEndOfInput))?;
     Ok(u16::from_be_bytes([slice[0], slice[1]]))
 }
 
 fn be_u32(bytes: &[u8], pos: usize) -> Result<u32, SqliteError> {
-    let slice =
-        bytes.get(pos..pos + 4).ok_or(SqliteError::new(SqliteErrorKind::UnexpectedEndOfInput))?;
+    let slice = pos
+        .checked_add(4)
+        .and_then(|end| bytes.get(pos..end))
+        .ok_or(SqliteError::new(SqliteErrorKind::UnexpectedEndOfInput))?;
     Ok(u32::from_be_bytes([slice[0], slice[1], slice[2], slice[3]]))
+}
+
+/// The slice `bytes[pos..pos + len]`, or `UnexpectedEndOfInput` if it is out of range
+/// or the end offset overflows.
+fn checked_slice(bytes: &[u8], pos: usize, len: usize) -> Result<&[u8], SqliteError> {
+    pos.checked_add(len)
+        .and_then(|end| bytes.get(pos..end))
+        .ok_or(SqliteError::new(SqliteErrorKind::UnexpectedEndOfInput))
 }
 
 /// Parses the 100-byte database header.
@@ -159,7 +185,10 @@ pub fn parse_db_header(db: &[u8]) -> Result<DbInfo, SqliteError> {
         return Err(SqliteError::new(SqliteErrorKind::UnsupportedPageSize(ps_raw)));
     }
     let reserved = db[20];
-    let usable = page_size - usize::from(reserved);
+    let usable = page_size.saturating_sub(usize::from(reserved));
+    if usable < 480 {
+        return Err(SqliteError::new(SqliteErrorKind::UnsupportedPageSize(ps_raw)));
+    }
     let text_encoding = be_u32(db, 56)?;
     if text_encoding != 1 {
         return Err(SqliteError::new(SqliteErrorKind::UnsupportedTextEncoding(text_encoding)));
@@ -324,8 +353,12 @@ fn read_record(
             values.push(CellValue::Integer(rowid));
             continue;
         }
-        let st =
-            serial_iter.next().ok_or(SqliteError::new(SqliteErrorKind::UnexpectedEndOfInput))?;
+        // A record written before `ALTER TABLE ... ADD COLUMN` has fewer values than the
+        // schema; SQLite reads the missing trailing columns as NULL.
+        let Some(st) = serial_iter.next() else {
+            values.push(CellValue::Null);
+            continue;
+        };
         let (value, p) = decode_value(payload, pos, st)?;
         pos = p;
         values.push(value);
@@ -414,23 +447,23 @@ fn read_cell_payload(
 ) -> Result<Vec<u8>, SqliteError> {
     let max_local = info.usable - 35; // leaf-table max inline payload
     if payload_len <= max_local {
-        return db
-            .get(payload_start..payload_start + payload_len)
-            .ok_or(SqliteError::new(SqliteErrorKind::UnexpectedEndOfInput))
-            .map(|s| s.to_vec());
+        return checked_slice(db, payload_start, payload_len).map(<[u8]>::to_vec);
     }
 
     let min_local = ((info.usable - 12) * 32 / 255) - 23;
     let k = min_local + ((payload_len - min_local) % (info.usable - 4));
     let local = if k <= max_local { k } else { min_local };
 
-    let mut out = Vec::with_capacity(payload_len);
-    out.extend_from_slice(
-        db.get(payload_start..payload_start + local)
-            .ok_or(SqliteError::new(SqliteErrorKind::UnexpectedEndOfInput))?,
-    );
+    // `payload_len` is untrusted: cap the preallocation at what the file can supply.
+    let mut out = Vec::with_capacity(payload_len.min(db.len()));
+    out.extend_from_slice(checked_slice(db, payload_start, local)?);
 
-    let mut next = be_u32(db, payload_start + local)?;
+    let mut next = be_u32(
+        db,
+        payload_start
+            .checked_add(local)
+            .ok_or(SqliteError::new(SqliteErrorKind::OffsetOverflow))?,
+    )?;
     let mut remaining = payload_len - local;
     while remaining > 0 {
         if next == 0 {
@@ -438,12 +471,12 @@ fn read_cell_payload(
         }
         let ov_start = (usize::try_from(next)
             .map_err(|_| SqliteError::new(SqliteErrorKind::OffsetOverflow))?
-            - 1)
+            .checked_sub(1)
+            .ok_or(SqliteError::new(SqliteErrorKind::InvalidPageNumber))?)
             * info.page_size;
         let chunk = (info.usable - 4).min(remaining);
-        let data = db
-            .get(ov_start + 4..ov_start + 4 + chunk)
-            .ok_or(SqliteError::new(SqliteErrorKind::TruncatedOverflow))?;
+        let data = checked_slice(db, ov_start + 4, chunk)
+            .map_err(|_| SqliteError::new(SqliteErrorKind::TruncatedOverflow))?;
         out.extend_from_slice(data);
         next = be_u32(db, ov_start)?;
         remaining -= chunk;
@@ -458,10 +491,15 @@ fn read_btree(
     page_number: u32,
     columns: &[Column],
     rows: &mut Vec<(i64, Vec<CellValue>)>,
+    depth: usize,
 ) -> Result<(), SqliteError> {
+    if depth > MAX_BTREE_DEPTH {
+        return Err(SqliteError::new(SqliteErrorKind::BTreeTooDeep));
+    }
     let page_start = (usize::try_from(page_number)
         .map_err(|_| SqliteError::new(SqliteErrorKind::OffsetOverflow))?
-        - 1)
+        .checked_sub(1)
+        .ok_or(SqliteError::new(SqliteErrorKind::InvalidPageNumber))?)
         * info.page_size;
     let header_offset = page_start + if page_number == 1 { 100 } else { 0 };
     let page_type =
@@ -480,7 +518,7 @@ fn read_btree(
         let cell_offset = page_start + ptr;
         if is_interior {
             let left_child = be_u32(db, cell_offset)?;
-            read_btree(db, info, left_child, columns, rows)?;
+            read_btree(db, info, left_child, columns, rows, depth + 1)?;
         } else {
             let (payload_len, p1) = read_varint(db, cell_offset)?;
             let (rowid, p2) = read_varint(db, p1)?;
@@ -492,7 +530,7 @@ fn read_btree(
 
     if is_interior {
         let right_child = be_u32(db, header_offset + 8)?;
-        read_btree(db, info, right_child, columns, rows)?;
+        read_btree(db, info, right_child, columns, rows, depth + 1)?;
     }
     Ok(())
 }
@@ -510,7 +548,7 @@ pub fn read_table(
 ) -> Result<Vec<(i64, Vec<CellValue>)>, SqliteError> {
     let info = parse_db_header(db)?;
     let mut rows = Vec::new();
-    read_btree(db, &info, rootpage, columns, &mut rows)?;
+    read_btree(db, &info, rootpage, columns, &mut rows, 0)?;
     Ok(rows)
 }
 
@@ -560,6 +598,47 @@ pub fn build_leaf_page(
 mod tests {
     use super::*;
 
+    /// A minimal 512-byte database whose page 1 is a table page of the given type.
+    fn tiny_db(page_type: u8) -> Vec<u8> {
+        let mut db = vec![0u8; 512];
+        db[0..16].copy_from_slice(MAGIC);
+        db[16..18].copy_from_slice(&512u16.to_be_bytes());
+        db[56..60].copy_from_slice(&1u32.to_be_bytes()); // UTF-8
+        db[100] = page_type;
+        db
+    }
+
+    #[test]
+    fn cyclic_interior_page_is_rejected_not_stack_overflowed() {
+        // Interior page 1 whose right-most child pointer is page 1 again.
+        let mut db = tiny_db(0x05);
+        db[103..105].copy_from_slice(&0u16.to_be_bytes()); // zero cells
+        db[108..112].copy_from_slice(&1u32.to_be_bytes()); // right child = page 1
+        let err = read_table(&db, 1, &[]).unwrap_err();
+        assert!(matches!(err.kind, SqliteErrorKind::BTreeTooDeep));
+    }
+
+    #[test]
+    fn page_zero_is_rejected() {
+        let db = tiny_db(0x0d);
+        let err = read_table(&db, 0, &[]).unwrap_err();
+        assert!(matches!(err.kind, SqliteErrorKind::InvalidPageNumber));
+    }
+
+    /// A claimed payload of 2^40 bytes must produce an error, not a multi-terabyte
+    /// allocation.
+    #[test]
+    fn huge_claimed_payload_does_not_allocate() {
+        let mut db = tiny_db(0x0d);
+        db[103..105].copy_from_slice(&1u16.to_be_bytes()); // one cell
+        db[108..110].copy_from_slice(&200u16.to_be_bytes()); // cell pointer
+        let mut cell = Vec::new();
+        write_varint(&mut cell, 1u64 << 40); // payload length
+        write_varint(&mut cell, 1); // rowid
+        db[200..200 + cell.len()].copy_from_slice(&cell);
+        assert!(read_table(&db, 1, &[]).is_err());
+    }
+
     #[test]
     fn varint_round_trips_small() {
         for v in [0u64, 1, 127, 128, 200, 16383, 16384, 1 << 56, u64::MAX] {
@@ -591,6 +670,20 @@ mod tests {
         assert_eq!(serial_type_len(12).unwrap(), 0); // 0-byte blob
         assert_eq!(serial_type_len(100).unwrap(), 44); // (100-12)/2
         assert!(serial_type_len(10).is_err());
+    }
+
+    /// A record with one value under a two-column schema (the second column was added
+    /// by `ALTER TABLE`) must decode, with the missing column as NULL.
+    #[test]
+    fn short_record_reads_missing_trailing_columns_as_null() {
+        let columns = [
+            Column { name: "a".into(), is_rowid_alias: false },
+            Column { name: "b".into(), is_rowid_alias: false },
+        ];
+        // Header: length 2 (itself + one serial type), serial type 1 (1-byte int); body 5.
+        let payload = [2u8, 1, 5];
+        let values = read_record(&payload, &columns, 1).unwrap();
+        assert_eq!(values, vec![CellValue::Integer(5), CellValue::Null]);
     }
 
     #[test]

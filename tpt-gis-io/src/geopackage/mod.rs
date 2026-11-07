@@ -50,6 +50,9 @@ pub enum GeoPackageError {
     /// A write target was too large for the single-leaf-page writer (a record would
     /// not fit inline, or the table would overflow a page).
     WriteTooLarge,
+    /// Two features share the same value in the `id` column, so they cannot both be
+    /// stored as the table's primary key.
+    DuplicateRowId(i64),
 }
 
 impl fmt::Display for GeoPackageError {
@@ -63,6 +66,9 @@ impl fmt::Display for GeoPackageError {
             }
             GeoPackageError::WriteTooLarge => {
                 write!(f, "GeoPackage write target exceeds the single-leaf-page limit")
+            }
+            GeoPackageError::DuplicateRowId(id) => {
+                write!(f, "two features share primary key {id}")
             }
         }
     }
@@ -146,7 +152,8 @@ pub fn read_gpkg(bytes: &[u8]) -> Result<Vec<Feature>, GeoPackageError> {
             for (col, val) in columns.iter().zip(vals) {
                 if col.name == geom_col {
                     if let CellValue::Blob(blob) = &val {
-                        if let Ok(Some((g, _))) = decode_geometry_blob(blob) {
+                        // A corrupt geometry is an error, not a silently null feature.
+                        if let Some((g, _)) = decode_geometry_blob(blob)? {
                             geometry = Some(g);
                         }
                     }
@@ -229,8 +236,13 @@ pub fn write_gpkg(features: &[Feature], opts: &WriteOptions) -> Result<Vec<u8>, 
         feature_cells.push((rowid, payload));
     }
 
+    feature_cells.sort_by_key(|(id, _)| *id);
+    if let Some(pair) = feature_cells.windows(2).find(|w| w[0].0 == w[1].0) {
+        return Err(GeoPackageError::DuplicateRowId(pair[0].0));
+    }
+
     // Metadata tables.
-    let srs_cells = build_meta_cells(&srs_columns(), &srs_row(opts));
+    let srs_cells = build_rows(&srs_columns(), &srs_rows(opts));
     let contents_cells = build_meta_cells(&contents_columns(), &contents_row(opts));
     let geomcols_cells = build_meta_cells(&geom_columns_cols(), &geomcols_row(opts));
 
@@ -333,23 +345,40 @@ fn parse_create_table(sql: &str) -> Vec<Column> {
         if def.is_empty() {
             continue;
         }
-        let first = match def.split_whitespace().next() {
-            Some(f) => f,
-            None => continue,
-        };
+        let (name, rest) = split_column_def(def);
+        let first = def.split_whitespace().next().unwrap_or("");
         match first.to_ascii_uppercase().as_str() {
             "PRIMARY" | "UNIQUE" | "FOREIGN" | "CHECK" | "CONSTRAINT" | "KEY" => continue,
             _ => {}
         }
-        let name = strip_ident(first);
-        let mut parts = def.split_whitespace();
-        parts.next();
-        let type_tok = parts.next().unwrap_or("").to_ascii_uppercase();
-        let rest = def[name.len()..].to_ascii_uppercase();
-        let is_alias = type_tok == "INTEGER" && rest.contains("PRIMARY KEY");
-        columns.push(Column { name, is_rowid_alias: is_alias });
+        let type_tok = rest.split_whitespace().next().unwrap_or("").to_ascii_uppercase();
+        let is_alias = type_tok == "INTEGER" && rest.to_ascii_uppercase().contains("PRIMARY KEY");
+        columns.push(Column { name: name.to_string(), is_rowid_alias: is_alias });
     }
     columns
+}
+
+/// Splits one column definition into its (unquoted) name and the remainder.
+///
+/// A quoted identifier (`"..."`, `` `...` ``, or `[...]`) may contain spaces and
+/// non-ASCII characters; its closing delimiter is ASCII, so slicing on it is always
+/// at a character boundary. An unquoted name ends at the first whitespace.
+fn split_column_def(def: &str) -> (&str, &str) {
+    let mut chars = def.char_indices();
+    let close = match chars.next() {
+        Some((_, '"')) => Some('"'),
+        Some((_, '`')) => Some('`'),
+        Some((_, '[')) => Some(']'),
+        _ => None,
+    };
+    if let Some(close) = close {
+        // Everything after the opening delimiter, up to the matching closing one.
+        if let Some(end) = def[1..].find(close).map(|i| i + 1) {
+            return (&def[1..end], &def[end + 1..]);
+        }
+    }
+    let end = def.find(char::is_whitespace).unwrap_or(def.len());
+    (&def[..end], &def[end..])
 }
 
 /// Splits a `CREATE TABLE` body on top-level commas (ignoring commas inside `()`).
@@ -377,23 +406,6 @@ fn split_top_level(s: &str) -> Vec<String> {
         parts.push(cur);
     }
     parts
-}
-
-/// Removes surrounding double quotes / backticks / square brackets from an identifier.
-fn strip_ident(ident: &str) -> String {
-    let bytes = ident.as_bytes();
-    if !bytes.is_empty() {
-        match bytes[0] {
-            b'"' | b'`' if bytes.last() == Some(&bytes[0]) => {
-                return ident[1..ident.len() - 1].to_string();
-            }
-            b'[' if bytes.last() == Some(&b']') => {
-                return ident[1..ident.len() - 1].to_string();
-            }
-            _ => {}
-        }
-    }
-    ident.to_string()
 }
 
 fn cell_to_json(value: CellValue) -> Value {
@@ -488,6 +500,46 @@ fn srs_columns() -> Vec<Column> {
         ("definition", "TEXT"),
         ("description", "TEXT"),
     ])
+}
+
+/// The `gpkg_spatial_ref_sys` rows: the two spec-mandated undefined SRS entries (`-1`
+/// and `0`), plus the SRS the features use when it is something else.
+fn srs_rows(opts: &WriteOptions) -> Vec<Vec<CellValue>> {
+    let mut rows = vec![
+        undefined_srs_row(
+            -1,
+            "Undefined Cartesian SRS",
+            "undefined Cartesian coordinate reference system",
+        ),
+        undefined_srs_row(
+            0,
+            "Undefined geographic SRS",
+            "undefined geographic coordinate reference system",
+        ),
+    ];
+    if opts.srs_id != -1 && opts.srs_id != 0 {
+        rows.push(srs_row(opts));
+    }
+    rows
+}
+
+fn undefined_srs_row(id: i32, name: &str, description: &str) -> Vec<CellValue> {
+    vec![
+        CellValue::Text(name.into()),
+        CellValue::Integer(i64::from(id)),
+        CellValue::Text("NONE".into()),
+        CellValue::Integer(i64::from(id)),
+        CellValue::Text("undefined".into()),
+        CellValue::Text(description.into()),
+    ]
+}
+
+/// Builds one leaf-table cell per row, with rowids `1..=n`.
+fn build_rows(columns: &[Column], rows: &[Vec<CellValue>]) -> Vec<(i64, Vec<u8>)> {
+    rows.iter()
+        .enumerate()
+        .map(|(i, row)| (i as i64 + 1, sqlite::encode_record(columns, row)))
+        .collect()
 }
 
 fn srs_row(opts: &WriteOptions) -> Vec<CellValue> {
@@ -636,6 +688,8 @@ fn write_db_header(buf: &mut [u8], page_size: usize, page_count: u32) {
     buf[40..44].copy_from_slice(&1u32.to_be_bytes()); // schema cookie
     buf[44..48].copy_from_slice(&4u32.to_be_bytes()); // schema format number
     buf[56..60].copy_from_slice(&1u32.to_be_bytes()); // text encoding = UTF-8
+    buf[60..64].copy_from_slice(&10300u32.to_be_bytes()); // user_version: GeoPackage 1.3.0
+    buf[68..72].copy_from_slice(b"GPKG"); // application_id
 }
 
 const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -688,6 +742,37 @@ mod tests {
         }
     }
 
+    fn feature_with_id(id: i64) -> Feature {
+        let mut f = sample_feature();
+        f.properties.insert("fid".into(), Value::Number(serde_json::Number::from(id)));
+        f
+    }
+
+    #[test]
+    fn header_declares_geopackage_application_id_and_version() {
+        let bytes = write_gpkg(&[sample_feature()], &opts()).unwrap();
+        assert_eq!(&bytes[68..72], b"GPKG");
+        assert!(u32::from_be_bytes(bytes[60..64].try_into().unwrap()) >= 10300);
+    }
+
+    #[test]
+    fn features_are_stored_in_rowid_order() {
+        let features = vec![feature_with_id(3), feature_with_id(1), feature_with_id(2)];
+        let bytes = write_gpkg(&features, &opts()).unwrap();
+        let ids: Vec<i64> = read_gpkg(&bytes)
+            .unwrap()
+            .iter()
+            .map(|f| f.properties["fid"].as_i64().unwrap())
+            .collect();
+        assert_eq!(ids, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn duplicate_ids_are_rejected_not_silently_written() {
+        let features = vec![feature_with_id(7), feature_with_id(7)];
+        assert!(matches!(write_gpkg(&features, &opts()), Err(GeoPackageError::DuplicateRowId(7))));
+    }
+
     #[test]
     fn write_then_read_round_trips() {
         let features = vec![sample_feature(), sample_feature()];
@@ -722,6 +807,16 @@ mod tests {
         let info = sqlite::parse_db_header(&bytes).unwrap();
         assert_eq!(info.page_size, 4096);
         assert_eq!(&bytes[0..16], sqlite::MAGIC);
+    }
+
+    #[test]
+    fn parse_create_table_handles_quoted_spaces_and_non_ascii_names() {
+        let sql = "CREATE TABLE t (\"my col\" INTEGER PRIMARY KEY, \"géom\" GEOMETRY, \"ñ\" TEXT)";
+        let cols = parse_create_table(sql);
+        let names: Vec<&str> = cols.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, vec!["my col", "géom", "ñ"]);
+        assert!(cols[0].is_rowid_alias);
+        assert!(!cols[1].is_rowid_alias);
     }
 
     #[test]
