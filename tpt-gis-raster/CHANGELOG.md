@@ -5,6 +5,17 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+- `geotiff::write_cog` and `CogOptions`: writes a Cloud Optimized GeoTIFF with tiles (16 to
+  4096 pixels), optional DEFLATE, and chained overview levels from 2×2 means that skip nodata.
+  Multi-band like `write_bands`.
+- `geotiff::read_band`, `GeoTiff::read_image_band`, `GeoTiff::band_count`: multi-band reading.
+- `geotiff::write` and `geotiff::write_bands`: uncompressed single-strip GeoTIFF writing.
+
+### Changed
+- `cog::validate` also reads overviews chained after the full-resolution IFD, as GDAL writes
+  them, in addition to SubIFDs.
+
 ## [0.1.0] - 2025-08-05
 
 ### Added

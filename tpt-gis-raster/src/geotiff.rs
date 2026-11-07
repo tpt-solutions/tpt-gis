@@ -44,7 +44,7 @@ use alloc::vec::Vec;
 use core::fmt;
 
 use crate::band::{AnyBand, Band, GeoTransform};
-use crate::cell::CellType;
+use crate::cell::{CellKind, CellType};
 use crate::error::RasterError;
 use crate::grid::Grid;
 
@@ -179,6 +179,8 @@ const TAG_MODEL_TIEPOINT: u16 = 33922;
 const TAG_MODEL_TRANSFORMATION: u16 = 34264;
 const TAG_GEO_KEY_DIRECTORY: u16 = 34735;
 const TAG_SUB_IFDS: u16 = 330;
+const TAG_TILE_OFFSETS: u16 = 324;
+const TAG_TILE_BYTE_COUNTS: u16 = 325;
 const TAG_GDAL_NODATA: u16 = 42113;
 
 /// GeoKey IDs of interest.
@@ -1711,6 +1713,415 @@ fn doubles(values: &[f64]) -> Vec<u8> {
     values.iter().flat_map(|v| v.to_le_bytes()).collect()
 }
 
+// ---------------------------------------------------------------------------
+// Cloud-optimised writing
+// ---------------------------------------------------------------------------
+
+/// Options for [`write_cog`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CogOptions {
+    /// Tile width and height in pixels: a power of two from 16 to 4096.
+    pub tile_size: u32,
+    /// Overview levels to write, each half the width and height of the one before. Fewer are
+    /// written when the image becomes a single pixel first. `0` writes no overviews.
+    pub overview_levels: u32,
+    /// Compress tiles with DEFLATE (zlib-wrapped, as TIFF requires). When `false`, tiles are
+    /// stored uncompressed.
+    pub deflate: bool,
+}
+
+impl Default for CogOptions {
+    fn default() -> Self {
+        CogOptions { tile_size: 256, overview_levels: 0, deflate: false }
+    }
+}
+
+/// One level of the pyramid: its size, its encoded tiles, and its georeferencing.
+struct CogLevel {
+    width: u32,
+    height: u32,
+    tiles: Vec<Vec<u8>>,
+    transform: GeoTransform,
+}
+
+/// The values of a band's cells as `f64`.
+fn band_values(band: &AnyBand) -> Vec<f64> {
+    match band {
+        AnyBand::U8(b) => b.grid().cells().iter().map(|c| c.to_f64()).collect(),
+        AnyBand::U16(b) => b.grid().cells().iter().map(|c| c.to_f64()).collect(),
+        AnyBand::I16(b) => b.grid().cells().iter().map(|c| c.to_f64()).collect(),
+        AnyBand::U32(b) => b.grid().cells().iter().map(|c| c.to_f64()).collect(),
+        AnyBand::I32(b) => b.grid().cells().iter().map(|c| c.to_f64()).collect(),
+        AnyBand::F32(b) => b.grid().cells().iter().map(|c| c.to_f64()).collect(),
+        AnyBand::F64(b) => b.grid().cells().to_vec(),
+    }
+}
+
+/// The nodata value of a band as `f64`, if it has one.
+fn band_nodata(band: &AnyBand) -> Option<f64> {
+    match band {
+        AnyBand::U8(b) => b.nodata().map(|v| v.to_f64()),
+        AnyBand::U16(b) => b.nodata().map(|v| v.to_f64()),
+        AnyBand::I16(b) => b.nodata().map(|v| v.to_f64()),
+        AnyBand::U32(b) => b.nodata().map(|v| v.to_f64()),
+        AnyBand::I32(b) => b.nodata().map(|v| v.to_f64()),
+        AnyBand::F32(b) => b.nodata().map(|v| v.to_f64()),
+        AnyBand::F64(b) => b.nodata().copied(),
+    }
+}
+
+/// Appends one sample, converted to the cell type `kind`, little-endian.
+fn push_sample(out: &mut Vec<u8>, kind: CellKind, v: f64) {
+    match kind {
+        CellKind::U8 => out.extend_from_slice(&<u8 as CellType>::from_f64(v).to_le_bytes()),
+        CellKind::U16 => out.extend_from_slice(&<u16 as CellType>::from_f64(v).to_le_bytes()),
+        CellKind::I16 => out.extend_from_slice(&<i16 as CellType>::from_f64(v).to_le_bytes()),
+        CellKind::U32 => out.extend_from_slice(&<u32 as CellType>::from_f64(v).to_le_bytes()),
+        CellKind::I32 => out.extend_from_slice(&<i32 as CellType>::from_f64(v).to_le_bytes()),
+        CellKind::F32 => out.extend_from_slice(&<f32 as CellType>::from_f64(v).to_le_bytes()),
+        CellKind::F64 => out.extend_from_slice(&<f64 as CellType>::from_f64(v).to_le_bytes()),
+    }
+}
+
+/// Whether a value counts as data: not NaN, and not the nodata value.
+fn is_valid_value(v: f64, nodata: Option<f64>) -> bool {
+    if v.is_nan() {
+        return false;
+    }
+    match nodata {
+        Some(n) if n.is_nan() => false,
+        Some(n) => v != n,
+        None => true,
+    }
+}
+
+/// Halves a level: each output cell is the mean of the valid input cells in its 2×2 block.
+/// A block with no valid cell takes the nodata value, or `0` when there is none.
+fn halve(
+    values: &[Vec<f64>],
+    width: usize,
+    height: usize,
+    nodata: Option<f64>,
+) -> (Vec<Vec<f64>>, usize, usize) {
+    let (nw, nh) = (width.div_ceil(2), height.div_ceil(2));
+    let out = values
+        .iter()
+        .map(|band| {
+            let mut out = vec![nodata.unwrap_or(0.0); nw * nh];
+            for y in 0..nh {
+                for x in 0..nw {
+                    let (mut sum, mut count) = (0.0, 0usize);
+                    for sy in 2 * y..(2 * y + 2).min(height) {
+                        for sx in 2 * x..(2 * x + 2).min(width) {
+                            let v = band[sy * width + sx];
+                            if is_valid_value(v, nodata) {
+                                sum += v;
+                                count += 1;
+                            }
+                        }
+                    }
+                    if count > 0 {
+                        out[y * nw + x] = sum / count as f64;
+                    }
+                }
+            }
+            out
+        })
+        .collect();
+    (out, nw, nh)
+}
+
+/// Encodes every tile of a level, row by row, pixel-interleaved across bands. Edge tiles are
+/// padded with zeros to the full tile size.
+fn encode_tiles(
+    values: &[Vec<f64>],
+    width: usize,
+    height: usize,
+    tile: usize,
+    kind: CellKind,
+    deflate: bool,
+) -> Vec<Vec<u8>> {
+    let mut tiles = Vec::new();
+    for ty in 0..height.div_ceil(tile) {
+        for tx in 0..width.div_ceil(tile) {
+            let mut raw = Vec::with_capacity(tile * tile * values.len() * kind.size_bytes());
+            for py in 0..tile {
+                for px in 0..tile {
+                    let (x, y) = (tx * tile + px, ty * tile + py);
+                    for band in values {
+                        let v = if x < width && y < height { band[y * width + x] } else { 0.0 };
+                        push_sample(&mut raw, kind, v);
+                    }
+                }
+            }
+            tiles.push(if deflate {
+                use std::io::Write;
+                let mut encoder =
+                    flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+                encoder.write_all(&raw).expect("in-memory write");
+                encoder.finish().expect("in-memory finish")
+            } else {
+                raw
+            });
+        }
+    }
+    tiles
+}
+
+/// The tags shared by every level of a COG, taken from the first band.
+struct CogCommon {
+    tile: u32,
+    samples: u16,
+    bits: u16,
+    format: u16,
+    compression: u16,
+    photometric: u16,
+    nodata: Option<String>,
+    epsg: Option<u32>,
+}
+
+/// Builds one IFD block at absolute file position `pos`: the entry count, the entries, the
+/// next-IFD pointer, then the out-of-line arrays. Its length does not depend on the offset
+/// values, so it can be measured before they are known.
+fn ifd_block(
+    pos: u32,
+    level: &CogLevel,
+    common: &CogCommon,
+    is_full: bool,
+    next: u32,
+    offsets: &[u32],
+    counts: &[u32],
+) -> Vec<u8> {
+    let spp = usize::from(common.samples);
+    let mut fields = vec![
+        Field::new(254, TYPE_LONG, longs(&[if is_full { 0 } else { 1 }])),
+        Field::new(TAG_IMAGE_WIDTH, TYPE_LONG, longs(&[level.width])),
+        Field::new(TAG_IMAGE_LENGTH, TYPE_LONG, longs(&[level.height])),
+        Field::new(TAG_BITS_PER_SAMPLE, TYPE_SHORT, shorts(&vec![common.bits; spp])),
+        Field::new(TAG_COMPRESSION, TYPE_SHORT, shorts(&[common.compression])),
+        Field::new(TAG_PHOTOMETRIC, TYPE_SHORT, shorts(&[common.photometric])),
+        Field::new(TAG_SAMPLES_PER_PIXEL, TYPE_SHORT, shorts(&[common.samples])),
+        Field::new(TAG_PLANAR_CONFIG, TYPE_SHORT, shorts(&[1])),
+        Field::new(TAG_SAMPLE_FORMAT, TYPE_SHORT, shorts(&vec![common.format; spp])),
+        Field::new(TAG_TILE_WIDTH, TYPE_LONG, longs(&[common.tile])),
+        Field::new(TAG_TILE_HEIGHT, TYPE_LONG, longs(&[common.tile])),
+        Field::new(TAG_TILE_OFFSETS, TYPE_LONG, longs(offsets)),
+        Field::new(TAG_TILE_BYTE_COUNTS, TYPE_LONG, longs(counts)),
+    ];
+    if is_full {
+        let t = &level.transform;
+        fields.push(Field::new(
+            TAG_MODEL_PIXEL_SCALE,
+            TYPE_DOUBLE,
+            doubles(&[t.pixel_width(), t.pixel_height(), 0.0]),
+        ));
+        fields.push(Field::new(
+            TAG_MODEL_TIEPOINT,
+            TYPE_DOUBLE,
+            doubles(&[0.0, 0.0, 0.0, t.origin_x(), t.origin_y(), 0.0]),
+        ));
+        if let Some(code) = common.epsg {
+            let code = u16::try_from(code).unwrap_or(0);
+            let geographic = (4000..5000).contains(&code);
+            let (model_type, crs_key) =
+                if geographic { (2, GEOKEY_GEOGRAPHIC_TYPE) } else { (1, GEOKEY_PROJECTED_TYPE) };
+            fields.push(Field::new(
+                TAG_GEO_KEY_DIRECTORY,
+                TYPE_SHORT,
+                shorts(&[
+                    1,
+                    1,
+                    0,
+                    3,
+                    1024,
+                    0,
+                    1,
+                    model_type,
+                    GEOKEY_RASTER_TYPE,
+                    0,
+                    1,
+                    1,
+                    crs_key,
+                    0,
+                    1,
+                    code,
+                ]),
+            ));
+        }
+    }
+    if let Some(text) = &common.nodata {
+        let mut bytes = text.clone().into_bytes();
+        bytes.push(0);
+        fields.push(Field::new(TAG_GDAL_NODATA, TYPE_ASCII, bytes));
+    }
+    fields.sort_by_key(|f| f.tag);
+
+    let header_len = 2 + 12 * fields.len() + 4;
+    let mut cursor = pos as usize + header_len;
+    for field in &mut fields {
+        if field.payload.len() > 4 {
+            cursor += cursor % 2;
+            field.offset = cursor as u32;
+            cursor += field.payload.len();
+        }
+    }
+    let mut out = Vec::with_capacity(cursor - pos as usize);
+    out.extend_from_slice(&(fields.len() as u16).to_le_bytes());
+    for field in &fields {
+        out.extend_from_slice(&field.tag.to_le_bytes());
+        out.extend_from_slice(&field.field_type.to_le_bytes());
+        out.extend_from_slice(&field.count.to_le_bytes());
+        if field.payload.len() > 4 {
+            out.extend_from_slice(&field.offset.to_le_bytes());
+        } else {
+            let mut inline = field.payload.clone();
+            inline.resize(4, 0);
+            out.extend_from_slice(&inline);
+        }
+    }
+    out.extend_from_slice(&next.to_le_bytes());
+    for field in &fields {
+        if field.payload.len() > 4 {
+            pad_to_word(&mut out);
+            out.extend_from_slice(&field.payload);
+        }
+    }
+    out
+}
+
+/// Writes a Cloud Optimized GeoTIFF of one or more bands with the same shape and cell type.
+///
+/// The layout is the COG arrangement: every level is tiled; the image file directories come
+/// first (full resolution, then each overview, chained by next-IFD pointers); then the tile
+/// data, with the coarsest level's tiles first. Overviews are 2×2 means that skip nodata.
+/// Tiles are pixel-interleaved across bands, as in [`write_bands`].
+///
+/// # Errors
+/// Returns [`GeoTiffError::Unsupported`] if no band is given, the bands do not share one
+/// layout, the tile size is not a power of two from 16 to 4096, or the file would exceed the
+/// 4 GiB limit of classic TIFF.
+pub fn write_cog(bands: &[&AnyBand], options: &CogOptions) -> Result<Vec<u8>> {
+    let too_large = || GeoTiffError::Unsupported("raster exceeds the 4 GiB limit of classic TIFF");
+    let first = *bands
+        .first()
+        .ok_or(GeoTiffError::Unsupported("at least one band is needed to write a COG"))?;
+    let tile = options.tile_size;
+    if !(16..=4096).contains(&tile) || !tile.is_power_of_two() {
+        return Err(GeoTiffError::Unsupported("tile size must be a power of two from 16 to 4096"));
+    }
+    if first.width() == 0 || first.height() == 0 {
+        return Err(GeoTiffError::Unsupported("an empty raster has no TIFF representation"));
+    }
+    let samples = samples_of_band(first);
+    let uniform = bands.iter().all(|band| {
+        band.width() == first.width()
+            && band.height() == first.height()
+            && band.kind() == first.kind()
+            && band.transform().to_gdal() == first.transform().to_gdal()
+            && band.epsg() == first.epsg()
+            && samples_of_band(band).nodata == samples.nodata
+    });
+    if !uniform {
+        return Err(GeoTiffError::Unsupported(
+            "bands must share size, cell type, transform, EPSG code and nodata",
+        ));
+    }
+    let samples_per_pixel =
+        u16::try_from(bands.len()).map_err(|_| GeoTiffError::Unsupported("too many bands"))?;
+    let kind = first.kind();
+    let nodata = band_nodata(first);
+    let common = CogCommon {
+        tile,
+        samples: samples_per_pixel,
+        bits: samples.bits,
+        format: samples.format,
+        compression: if options.deflate { COMPRESSION_DEFLATE } else { COMPRESSION_NONE },
+        photometric: if samples_per_pixel == 3 && samples.bits == 8 { 2 } else { 1 },
+        nodata: samples.nodata.clone(),
+        epsg: first.epsg(),
+    };
+
+    // Build the levels, full resolution first.
+    let mut levels: Vec<CogLevel> = Vec::new();
+    let mut values: Vec<Vec<f64>> = bands.iter().map(|b| band_values(b)).collect();
+    let (mut width, mut height) = (first.width(), first.height());
+    let mut transform = first.transform();
+    levels.push(CogLevel {
+        width: u32::try_from(width).map_err(|_| too_large())?,
+        height: u32::try_from(height).map_err(|_| too_large())?,
+        tiles: encode_tiles(&values, width, height, tile as usize, kind, options.deflate),
+        transform,
+    });
+    for _ in 0..options.overview_levels {
+        if width <= 1 && height <= 1 {
+            break;
+        }
+        let (next, nw, nh) = halve(&values, width, height, nodata);
+        width = nw;
+        height = nh;
+        transform = GeoTransform::new(
+            transform.origin_x(),
+            transform.origin_y(),
+            transform.pixel_width() * 2.0,
+            transform.pixel_height() * 2.0,
+        );
+        values = next;
+        levels.push(CogLevel {
+            width: u32::try_from(width).map_err(|_| too_large())?,
+            height: u32::try_from(height).map_err(|_| too_large())?,
+            tiles: encode_tiles(&values, width, height, tile as usize, kind, options.deflate),
+            transform,
+        });
+    }
+
+    // Measure each directory with placeholder offsets (its length does not depend on the
+    // offset values), then place the directories after the 8-byte header.
+    let mut ifd_positions = Vec::with_capacity(levels.len());
+    let mut pos = 8u32;
+    for (i, level) in levels.iter().enumerate() {
+        let zeros = vec![0u32; level.tiles.len()];
+        ifd_positions.push(pos);
+        let block = ifd_block(pos, level, &common, i == 0, 0, &zeros, &zeros);
+        pos = pos
+            .checked_add(u32::try_from(block.len()).map_err(|_| too_large())?)
+            .ok_or_else(too_large)?;
+        pos += pos % 2;
+    }
+
+    // Tile data: the coarsest level first, each tile word-aligned.
+    let mut offsets: Vec<Vec<u32>> = vec![Vec::new(); levels.len()];
+    let mut counts: Vec<Vec<u32>> = vec![Vec::new(); levels.len()];
+    let mut cursor = pos;
+    for li in (0..levels.len()).rev() {
+        for tile_bytes in &levels[li].tiles {
+            cursor += cursor % 2;
+            offsets[li].push(cursor);
+            let len = u32::try_from(tile_bytes.len()).map_err(|_| too_large())?;
+            counts[li].push(len);
+            cursor = cursor.checked_add(len).ok_or_else(too_large)?;
+        }
+    }
+
+    let mut out = vec![0u8; cursor as usize];
+    out[0..2].copy_from_slice(b"II");
+    out[2..4].copy_from_slice(&42u16.to_le_bytes());
+    out[4..8].copy_from_slice(&ifd_positions[0].to_le_bytes());
+    for (i, level) in levels.iter().enumerate() {
+        let next = ifd_positions.get(i + 1).copied().unwrap_or(0);
+        let block =
+            ifd_block(ifd_positions[i], level, &common, i == 0, next, &offsets[i], &counts[i]);
+        let start = ifd_positions[i] as usize;
+        out[start..start + block.len()].copy_from_slice(&block);
+    }
+    for li in (0..levels.len()).rev() {
+        for (tile_bytes, &offset) in levels[li].tiles.iter().zip(&offsets[li]) {
+            let start = offset as usize;
+            out[start..start + tile_bytes.len()].copy_from_slice(tile_bytes);
+        }
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod write_tests {
     use super::*;
@@ -2618,6 +3029,99 @@ mod lzw_tests {
         assert!(matches!(
             decode_lzw(&encoded, 1000),
             Err(GeoTiffError::SizeMismatch("LZW output exceeds declared size"))
+        ));
+    }
+}
+
+#[cfg(test)]
+mod cog_write_tests {
+    use super::*;
+    use crate::cog;
+
+    fn band(width: usize, height: usize, cells: Vec<u16>) -> AnyBand {
+        let gt = GeoTransform::new(500_000.0, 5_400_000.0, 10.0, 10.0);
+        AnyBand::U16(Band::new(Grid::new(width, height, cells).unwrap(), gt).with_epsg(32633))
+    }
+
+    fn values(band: &AnyBand) -> Vec<f64> {
+        let mut out = Vec::new();
+        for y in 0..band.height() {
+            for x in 0..band.width() {
+                out.push(band.value_at_f64(x, y).unwrap());
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn cog_round_trips_full_resolution_and_overviews() {
+        let cells: Vec<u16> = (0..40 * 30).map(|i| ((i * 37) % 900) as u16).collect();
+        let original = band(40, 30, cells);
+        let options = CogOptions { tile_size: 16, overview_levels: 2, deflate: true };
+        let bytes = write_cog(&[&original], &options).unwrap();
+
+        let full = read(&bytes).unwrap();
+        assert_eq!(values(&full), values(&original));
+
+        // Overview 1 is 20x15: each cell is the mean of a 2x2 block (rounded, as u16 stores it).
+        let ov1 = GeoTiff::parse(&bytes).unwrap().read_image_band(1, 0).unwrap();
+        assert_eq!((ov1.width(), ov1.height()), (20, 15));
+        let source = values(&original);
+        let want = (source[0] + source[1] + source[40] + source[41]) / 4.0;
+        assert_eq!(ov1.value_at_f64(0, 0), Some(want.round()));
+    }
+
+    #[test]
+    fn cog_passes_the_validator_with_overviews() {
+        let original = band(600, 300, vec![7u16; 600 * 300]);
+        let options = CogOptions { tile_size: 256, overview_levels: 2, deflate: false };
+        let bytes = write_cog(&[&original], &options).unwrap();
+        let report = cog::validate(&bytes).unwrap();
+        assert!(report.is_valid(), "{:?}", report.issues);
+        assert_eq!(report.overviews.len(), 2);
+        assert!(report.issues.is_empty(), "{:?}", report.issues);
+    }
+
+    #[test]
+    fn deflate_and_plain_tiles_decode_to_the_same_cells() {
+        let cells: Vec<u16> = (0..70 * 50).map(|i| (i % 300) as u16).collect();
+        let original = band(70, 50, cells);
+        let plain = write_cog(
+            &[&original],
+            &CogOptions { tile_size: 32, overview_levels: 1, deflate: false },
+        )
+        .unwrap();
+        let packed = write_cog(
+            &[&original],
+            &CogOptions { tile_size: 32, overview_levels: 1, deflate: true },
+        )
+        .unwrap();
+        assert!(packed.len() < plain.len(), "deflate should shrink repetitive tiles");
+        assert_eq!(values(&read(&plain).unwrap()), values(&read(&packed).unwrap()));
+    }
+
+    #[test]
+    fn overviews_stop_at_one_pixel() {
+        let original = band(5, 3, vec![1u16; 15]);
+        let bytes = write_cog(
+            &[&original],
+            &CogOptions { tile_size: 16, overview_levels: 9, deflate: false },
+        )
+        .unwrap();
+        // 5x3 -> 3x2 -> 2x1 -> 1x1: three overviews, then nothing more.
+        assert_eq!(GeoTiff::parse(&bytes).unwrap().image_count(), 4);
+    }
+
+    #[test]
+    fn rejects_bad_tile_sizes_and_empty_input() {
+        let original = band(4, 4, vec![0u16; 16]);
+        for bad in [0u32, 8, 100, 8192] {
+            let options = CogOptions { tile_size: bad, ..CogOptions::default() };
+            assert!(matches!(write_cog(&[&original], &options), Err(GeoTiffError::Unsupported(_))));
+        }
+        assert!(matches!(
+            write_cog(&[], &CogOptions::default()),
+            Err(GeoTiffError::Unsupported(_))
         ));
     }
 }

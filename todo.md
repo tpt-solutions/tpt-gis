@@ -521,7 +521,11 @@ the same logic, not real GDAL/QGIS/libtiff output; add third-party fixtures.
         functions), and GDAL reads the file and gives the same bounding-box count.
       - Open: WKT `EMPTY` (the model has no empty geometries), GeoPackage WITHOUT ROWID
         tables, and a CLI flag for the index.
-- [ ] Raster: overview IFDs, COG writer (multi-band read and write, and the single-band GeoTIFF writer, are done)
+- [x] Raster: overview IFDs and COG writer (`geotiff::write_cog`: tiled, multi-band,
+      deflate, chained overviews from 2×2 means that skip nodata). Checked with GDAL
+      (rasterio): tiling, overview levels, georeferencing, nodata, and every overview value.
+      The validator now reads chained overviews too. Open: other overview resampling
+      methods, predictors and BigTIFF on write; GDAL's own COG validator was not run.
       - Done: PixelIsPoint georeferencing (the origin moves half a pixel); ZSTD decoding
         (`ruzstd`, decode only). Tests cover raw-block frames; real compressed streams are
         exercised by the decoder's own tests, not by ours.

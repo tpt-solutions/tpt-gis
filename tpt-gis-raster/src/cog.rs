@@ -96,8 +96,22 @@ pub fn validate(data: &[u8]) -> Result<CogReport, GeoTiffError> {
         issues.push((CogIssue::MissingGeoreferencing, false));
     }
 
-    // Walk the overview (SubIFD) pyramid, finest-to-coarsest.
+    // Overviews are the images chained after the full resolution (GDAL's layout), then the
+    // SubIFD pyramid of each. Both are reported finest-to-coarsest within their group.
     let mut overviews = Vec::new();
+    for index in 1..tiff.image_count() {
+        let layout = match tiff.layout(index) {
+            Ok(layout) => layout,
+            Err(_) => continue,
+        };
+        if layout.last_data_offset > file_len {
+            issues.push((CogIssue::DataOutOfRange, true));
+        }
+        if !layout.tiled {
+            issues.push((CogIssue::OverviewNotTiled, false));
+        }
+        overviews.push(layout);
+    }
     let mut frontier = full.subifds.clone();
     for _ in 0..64 {
         if frontier.is_empty() {
