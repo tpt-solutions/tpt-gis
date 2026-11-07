@@ -474,6 +474,11 @@ the same logic, not real GDAL/QGIS/libtiff output; add third-party fixtures.
 - [ ] I/O: ISO WKB Z/M + EWKB; WKT `EMPTY`/`Z`/`SRID=`; bare GeoJSON Feature/Geometry,
       `properties: null`; shapefile `.prj`/`.cpg`/Z types + writer; GeoPackage
       WITHOUT ROWID + R-tree tables
+      - Done: ISO and EWKB Z/M/SRID in WKB (extra ordinates are read and dropped), WKT
+        `Z`/`M`/`ZM` tags and `SRID=` prefixes, bare GeoJSON Feature and geometry objects,
+        and `properties: null`. Z and M values are not kept: the model is 2D.
+      - Open: WKT `EMPTY` (the model has no empty geometries), shapefile `.prj`/`.cpg`
+        and Z types, a shapefile writer, GeoPackage WITHOUT ROWID and R-tree tables.
 - [ ] Raster: multi-band, ZSTD, overview IFDs, GeoTIFF/COG writer, PixelIsPoint
 - [ ] Index: R-tree remove + k-NN; polygon-polygon and nearest spatial joins;
       H3/S2 polygon covering
