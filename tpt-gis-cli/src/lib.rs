@@ -9,7 +9,8 @@
 //! - `geofence-compile`: emits a `no_std`-friendly Rust module of polygon data.
 //! - `generate-fixtures`: writes synthetic GeoJSON test fixtures for benchmarking.
 
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
+use clap_complete::Shell;
 use serde_json::Map;
 use serde_json::Value;
 use tpt_gis_core::projection::{utm::Zone, web_mercator};
@@ -79,7 +80,8 @@ enum Commands {
         #[arg(long)]
         input: String,
 
-        /// Target CRS: web-mercator or utm-zone (e.g. utm-18n, utm-33s).
+        /// Target CRS: web-mercator, utm-zone (e.g. utm-18n, utm-33s), or an EPSG code
+        /// (4326, 3857, 32601-32660, 32701-32760), e.g. EPSG:3857.
         #[arg(long)]
         crs: String,
 
@@ -110,6 +112,11 @@ enum Commands {
     Info {
         /// Input file.
         input: String,
+    },
+    /// Print a shell completion script for `tptgis` to standard output.
+    Completions {
+        /// Shell to generate for: bash, zsh, fish, powershell, or elvish.
+        shell: Shell,
     },
     /// Check a vector or GeoTIFF file. Prints a JSON report; exits with an error if any
     /// problem is found.
@@ -194,8 +201,38 @@ where
         Commands::Convert { input, output, from, to } => run_convert(input, output, from, to),
         Commands::Info { input } => run_info(input),
         Commands::Validate { input } => run_validate(&input),
+        Commands::Completions { shell } => {
+            let mut buf = Vec::new();
+            clap_complete::generate(shell, &mut Cli::command(), "tptgis", &mut buf);
+            write_stdout_bytes(&buf)
+        }
         Commands::GeofenceCompile { input, output } => run_geofence_compile(input, output),
     }
+}
+
+/// A JSON summary of a GeoTIFF: size, cell type, georeferencing, and tiling.
+fn raster_summary(bytes: &[u8]) -> Result<Value, String> {
+    use tpt_gis_raster::geotiff::GeoTiff;
+    let tiff = GeoTiff::parse(bytes).map_err(|e| format!("invalid GeoTIFF: {e}"))?;
+    let band = tiff.read().map_err(|e| format!("cannot read GeoTIFF image: {e}"))?;
+    let layout = tiff.layout(0).map_err(|e| format!("cannot read GeoTIFF layout: {e}"))?;
+    let t = band.transform();
+    Ok(serde_json::json!({
+        "format": "GeoTIFF",
+        "images": tiff.image_count(),
+        "width": band.width(),
+        "height": band.height(),
+        "cell_type": format!("{:?}", band.kind()),
+        "epsg": band.epsg(),
+        "origin": [t.origin_x(), t.origin_y()],
+        "pixel_size": [t.pixel_width(), t.pixel_height()],
+        "tiled": layout.tiled,
+        "tile_size": if layout.tiled {
+            serde_json::json!([layout.tile_width, layout.tile_height])
+        } else {
+            Value::Null
+        },
+    }))
 }
 
 /// Writes `text` to stdout, treating a closed pipe (e.g. `tptgis ... | head`) as a
@@ -290,6 +327,17 @@ fn run_validate(input: &str) -> Result<(), String> {
 }
 
 fn run_info(input: String) -> Result<(), String> {
+    if input.to_ascii_lowercase().ends_with(".tif") || input.to_ascii_lowercase().ends_with(".tiff")
+    {
+        let bytes = std::fs::read(&input).map_err(|e| format!("failed to read {input}: {e}"))?;
+        let json = raster_summary(&bytes)?;
+        let text = serde_json::to_string_pretty(&json)
+            .map_err(|e| format!("failed to render JSON: {e}"))?;
+        return write_stdout(&format!(
+            "{text}
+"
+        ));
+    }
     let format = convert::Format::from_path(&input).ok_or_else(|| {
         format!("unsupported file type for '{input}' (supported: .geojson, .json, .wkt, .wkb, .shp, .gpkg)")
     })?;
@@ -455,6 +503,15 @@ fn run_reproject(input_path: String, crs: String, output: Option<String>) -> Res
 fn parse_crs(s: &str) -> Result<Crs, String> {
     match s.to_lowercase().as_str() {
         "web-mercator" => Ok(Crs::WebMercator),
+        code if code.starts_with("epsg:") => {
+            let number: u32 =
+                code[5..].parse().map_err(|_| format!("invalid EPSG code in '{s}'"))?;
+            tpt_gis_core::epsg::lookup(number).ok_or_else(|| {
+                format!(
+                    "EPSG:{number} is not supported (supported: 4326, 3857, 32601-32660, 32701-32760)"
+                )
+            })
+        }
         utm if utm.starts_with("utm-") => {
             let rest = &utm[4..];
             let (num, hem) = if let Some(n) = rest.strip_suffix("n") {
@@ -565,6 +622,18 @@ mod tests {
     fn parse_crs_rejects_out_of_range_zone() {
         let err = parse_crs("utm-61n").unwrap_err();
         assert!(err.contains("61"), "{err}");
+    }
+
+    #[test]
+    fn parse_crs_accepts_supported_epsg_codes() {
+        assert!(matches!(parse_crs("EPSG:3857"), Ok(Crs::WebMercator)));
+        assert!(matches!(parse_crs("epsg:32618"), Ok(Crs::Utm(_))));
+    }
+
+    #[test]
+    fn parse_crs_rejects_unsupported_epsg_codes_with_the_list() {
+        let err = parse_crs("EPSG:2154").unwrap_err();
+        assert!(err.contains("EPSG:2154") && err.contains("3857"), "{err}");
     }
 
     /// The unsupported-CRS message must interpolate the offending value.

@@ -56,7 +56,7 @@ fn convert_round_trips_through_geopackage() {
 #[test]
 fn convert_refuses_unknown_formats_with_a_clear_error() {
     let dir = scratch("unknown");
-    let input = dir.join("data.tif");
+    let input = dir.join("data.xyz");
     fs::write(&input, b"not a vector file").unwrap();
     let err = run_with_args(args(&["info", &path_str(&input)])).unwrap_err();
     assert!(err.contains("unsupported file type"), "{err}");
@@ -225,4 +225,41 @@ fn validate_reports_unreadable_tiff() {
     fs::write(&input, b"definitely not a tiff").unwrap();
     let err = run_with_args(args(&["validate", &path_str(&input)])).unwrap_err();
     assert!(err.contains("problem"), "{err}");
+}
+
+#[test]
+fn info_and_validate_accept_a_tiled_geotiff() {
+    let dir = scratch("tiff");
+    let input = dir.join("tiled.tif");
+    let bytes = tpt_gis_raster::geotiff::testsupport::make_cog(512, 512, 256, 256, |c, r| {
+        ((c + r) % 200) as u8
+    });
+    fs::write(&input, bytes).unwrap();
+    run_with_args(args(&["info", &path_str(&input)])).expect("info succeeds");
+    run_with_args(args(&["validate", &path_str(&input)])).expect("tiled COG is valid");
+}
+
+#[test]
+fn reproject_accepts_an_epsg_code() {
+    let dir = scratch("epsg");
+    let input = dir.join("pts.geojson");
+    let output = dir.join("out.geojson");
+    fs::write(
+        &input,
+        r#"{"type":"FeatureCollection","features":[{"type":"Feature","properties":{},
+            "geometry":{"type":"Point","coordinates":[10,20]}}]}"#,
+    )
+    .unwrap();
+    run_with_args(args(&[
+        "reproject",
+        "--input",
+        &path_str(&input),
+        "--crs",
+        "EPSG:3857",
+        "--output",
+        &path_str(&output),
+    ]))
+    .expect("reproject succeeds");
+    let text = fs::read_to_string(&output).unwrap();
+    assert!(text.contains("1113194"), "{text}");
 }
