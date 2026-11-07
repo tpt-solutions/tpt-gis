@@ -606,8 +606,9 @@ the same logic, not real GDAL/QGIS/libtiff output; add third-party fixtures.
         `feature-powerset` (`cargo hack check --feature-powerset`; passes locally across
         81 combinations), and `Swatinem/rust-cache` on the build jobs. Doc warnings were
         fixed so the docs job passes.
-      - Open: doctests as a separate job, the `http` feature in CI, semver checks,
-        coverage, scheduled audit and fuzz runs.
+      - Done: coverage (`coverage.yml`, cargo-llvm-cov, lcov kept as an artifact; 91% of lines
+        with all features). Scheduled advisory and fuzz runs are in `scheduled.yml`.
+      - Open: semver checks (need a published baseline) and a Codecov upload (needs a token).
 - [ ] `release.yml`: ordered `cargo publish`, GitHub Release with changelog extraction,
       prebuilt `tptgis` binaries, `cargo-binstall` metadata, Homebrew formula
 - [ ] Publish crates + wheels and tag a first release (nothing is on crates.io/PyPI yet;

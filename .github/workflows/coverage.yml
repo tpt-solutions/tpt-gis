@@ -1,0 +1,40 @@
+name: Coverage
+
+# Line coverage of the whole workspace, as an lcov report kept as a workflow artifact. No
+# external service or token is needed. Runs on pushes to master and when started by hand.
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  coverage:
+    name: line coverage (cargo-llvm-cov)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - run: cargo install cargo-llvm-cov --locked
+      - name: Run the tests with coverage instrumentation
+        run: cargo llvm-cov --workspace --all-features --lcov --output-path lcov.info
+      - name: Print the summary
+        run: cargo llvm-cov report --summary-only
+      - name: Keep the lcov report
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: lcov
+          path: lcov.info
+          if-no-files-found: error
