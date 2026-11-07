@@ -13,12 +13,22 @@
 
 pub mod bbox;
 pub mod distance;
+pub mod hull;
 pub mod line_string;
+pub mod measure;
+pub mod multi;
+pub mod overlay;
 pub mod point;
 pub mod polygon;
 pub mod predicates;
+pub mod simplify;
+pub mod validity;
 
 pub use bbox::Rect;
+pub use hull::convex_hull;
 pub use line_string::LineString;
+pub use measure::ring_signed_area;
+pub use multi::{GeometryRef, MultiLineString, MultiPoint, MultiPolygon};
+pub use overlay::{polygon_within, segment_intersection};
 pub use point::Point;
 pub use polygon::Polygon;
