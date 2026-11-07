@@ -481,7 +481,10 @@ the same logic, not real GDAL/QGIS/libtiff output; add third-party fixtures.
       intersection point, touches/crosses/within/overlaps
       - Done: area, centroid, convex hull, simplify, `is_valid` (basic), segment
         intersection point, within, polygon touches/overlaps (`relate`, not DE-9IM).
-      - Open: `crosses`, line-polygon relations, full DE-9IM.
+      - Done: line-polygon `intersects` (`predicates::line_intersects_polygon`) and
+        `crosses` (`relate::line_crosses_polygon`, OGC: some of the line strictly inside and
+        some outside). Checked against GEOS on 500 pairs, including boundary contact.
+      - Open: line-line `crosses`, `within` for lines, full DE-9IM.
       - Fixed: `clip` split nearly vertical edges in lexicographic order; a cut could fall
         before its edge's own endpoint, so union, intersection and difference were wrong
         for some inputs (union returned nothing). Found by the GEOS differential test.

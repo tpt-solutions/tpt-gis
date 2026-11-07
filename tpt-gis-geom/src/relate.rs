@@ -12,8 +12,14 @@
 
 use crate::clip;
 use crate::float_ext::Fabs as _;
+use crate::line_string::LineString;
+use crate::point::Point;
 use crate::polygon::Polygon;
-use crate::predicates::{polygon_contains_polygon, polygons_intersect};
+use crate::predicates::{
+    covers_point, polygon_contains_polygon, polygons_intersect, ring_edges, rings,
+    segments_intersect, strictly_inside,
+};
+use alloc::vec::Vec;
 
 /// Relative tolerance for "no area" when comparing against the combined area.
 const AREA_TOLERANCE: f64 = 1e-9;
@@ -42,6 +48,77 @@ pub fn polygons_overlap(a: &Polygon, b: &Polygon) -> bool {
     }
     let scale = a.area().fabs() + b.area().fabs();
     intersection_area(a, b) > AREA_TOLERANCE * scale
+}
+
+/// The parameter `t` in `[0, 1]` along `a→b` where it meets `c→d`. For a collinear overlap,
+/// the parameters of the overlap's endpoints that lie on `a→b` are returned as well.
+fn crossing_params(a: Point, b: Point, c: Point, d: Point, out: &mut Vec<f64>) {
+    if !segments_intersect(a, b, c, d) {
+        return;
+    }
+    let r = (b.x - a.x, b.y - a.y);
+    let s = (d.x - c.x, d.y - c.y);
+    let denom = r.0 * s.1 - r.1 * s.0;
+    if denom == 0.0 {
+        // Parallel and touching: keep the endpoints of `c→d` that lie within `a→b`.
+        let len_sq = r.0 * r.0 + r.1 * r.1;
+        if len_sq == 0.0 {
+            return;
+        }
+        for p in [c, d] {
+            let t = ((p.x - a.x) * r.0 + (p.y - a.y) * r.1) / len_sq;
+            if (0.0..=1.0).contains(&t) {
+                out.push(t);
+            }
+        }
+        return;
+    }
+    let ca = (c.x - a.x, c.y - a.y);
+    let t = (ca.0 * s.1 - ca.1 * s.0) / denom;
+    if (0.0..=1.0).contains(&t) {
+        out.push(t);
+    }
+}
+
+/// Returns `true` if a line crosses a polygon in the OGC sense: some part of the line lies in
+/// the polygon's interior and some part lies outside the polygon, so the two interiors meet
+/// and neither contains the other. Parts on the boundary do not count either way.
+///
+/// The line is split where it meets the boundary, and each piece is classified by its
+/// midpoint. Requires the `alloc` feature.
+#[must_use]
+pub fn line_crosses_polygon(line: &LineString, poly: &Polygon) -> bool {
+    let mut cuts: Vec<f64> = Vec::new();
+    let (mut inside, mut outside) = (false, false);
+    for seg in line.points.windows(2) {
+        let (a, b) = (seg[0], seg[1]);
+        cuts.clear();
+        cuts.push(0.0);
+        cuts.push(1.0);
+        for ring in rings(poly) {
+            for i in 0..ring.len() {
+                let (c, d) = ring_edges(ring, i);
+                crossing_params(a, b, c, d, &mut cuts);
+            }
+        }
+        cuts.sort_by(f64::total_cmp);
+        for pair in cuts.windows(2) {
+            if pair[1] - pair[0] <= 1e-12 {
+                continue;
+            }
+            let t = 0.5 * (pair[0] + pair[1]);
+            let mid = Point::new(a.x + t * (b.x - a.x), a.y + t * (b.y - a.y));
+            if strictly_inside(poly, mid) {
+                inside = true;
+            } else if !covers_point(poly, mid) {
+                outside = true;
+            }
+            if inside && outside {
+                return true;
+            }
+        }
+    }
+    inside && outside
 }
 
 #[cfg(test)]

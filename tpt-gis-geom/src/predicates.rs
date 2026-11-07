@@ -150,6 +150,23 @@ pub fn linestrings_intersect(a: &LineString, b: &LineString) -> bool {
     false
 }
 
+/// Returns `true` if a line and a polygon share at least one point: a vertex of the line lies
+/// in the polygon (interior or boundary), or a segment of the line meets the boundary.
+#[must_use]
+pub fn line_intersects_polygon(line: &LineString, poly: &Polygon) -> bool {
+    if line.points.iter().any(|&p| covers_point(poly, p)) {
+        return true;
+    }
+    line.points.windows(2).any(|seg| {
+        rings(poly).any(|ring| {
+            (0..ring.len()).any(|i| {
+                let (c, d) = ring_edges(ring, i);
+                segments_intersect(seg[0], seg[1], c, d)
+            })
+        })
+    })
+}
+
 /// Returns `true` if the two polygons share any point: a boundary edge of one
 /// touches or crosses a boundary edge of the other (exterior or hole rings), or one
 /// polygon has an exterior vertex inside the other's region.
@@ -240,18 +257,18 @@ pub fn polygon_contains_polygon(outer: &Polygon, inner: &Polygon) -> bool {
 }
 
 /// Iterates over a polygon's exterior ring followed by its hole rings.
-fn rings<'a>(poly: &Polygon<'a>) -> impl Iterator<Item = &'a [Point]> + Clone + 'a {
+pub(crate) fn rings<'a>(poly: &Polygon<'a>) -> impl Iterator<Item = &'a [Point]> + Clone + 'a {
     core::iter::once(poly.exterior).chain(poly.interiors.iter().copied())
 }
 
 /// `true` if `p` is in `poly`'s closed region: inside, or on any of its rings.
-fn covers_point(poly: &Polygon, p: Point) -> bool {
+pub(crate) fn covers_point(poly: &Polygon, p: Point) -> bool {
     poly.contains_point(p) || on_polygon_boundary(poly, p)
 }
 
 /// `true` if `p` is on the boundary of `poly` (within [`tolerance_for`] of the polygon's
 /// coordinates).
-fn on_polygon_boundary(poly: &Polygon, p: Point) -> bool {
+pub(crate) fn on_polygon_boundary(poly: &Polygon, p: Point) -> bool {
     rings(poly).any(|ring| {
         (0..ring.len()).any(|i| {
             let (a, b) = ring_edges(ring, i);
@@ -261,7 +278,7 @@ fn on_polygon_boundary(poly: &Polygon, p: Point) -> bool {
 }
 
 /// `true` if `p` is inside `poly`'s region and not on its boundary.
-fn strictly_inside(poly: &Polygon, p: Point) -> bool {
+pub(crate) fn strictly_inside(poly: &Polygon, p: Point) -> bool {
     poly.contains_point(p) && !on_polygon_boundary(poly, p)
 }
 

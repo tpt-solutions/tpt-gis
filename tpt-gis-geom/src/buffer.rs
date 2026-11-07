@@ -15,7 +15,6 @@ use alloc::vec::Vec;
 use libm::{cos, sin, sqrt};
 
 use crate::clip::{self, OwnedPolygon};
-use crate::float_ext::Fabs as _;
 use crate::point::Point;
 use crate::polygon::Polygon;
 

@@ -602,7 +602,6 @@ fn remove_collinear(ring: Vec<Point>) -> Vec<Point> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::float_ext::Fabs as _;
     use alloc::vec;
 
     fn rect(x0: f64, y0: f64, x1: f64, y1: f64) -> Vec<Point> {
