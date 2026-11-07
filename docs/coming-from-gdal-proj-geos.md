@@ -67,7 +67,7 @@ they behave the same at micrometre and projected-metre scales.
 | Remote COG windows | `/vsicurl/` | `raster::http::CogRangeReader` (`http` feature) | 🟡 Range requests, custom headers; no retries |
 | Map algebra | `gdal_calc` | `raster::algebra` | ✅ add, subtract, reclassify, focal statistics |
 | Resampling | `gdalwarp -r` | `raster::resample` | 🟡 nearest, bilinear, average |
-| Write GeoTIFF or COG | `gdal_translate` | — | ❌ |
+| Write GeoTIFF | `gdal_translate` | `raster::geotiff::write` | 🟡 single band, uncompressed, one strip; no COG layout yet |
 | Multi-band, overviews, ZSTD | many | — | ❌ |
 
 ## Python

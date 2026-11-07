@@ -164,6 +164,10 @@ Source design doc: `spec.txt`.
 - [x] GeoTIFF parser (IFD/tag parsing, tiling) — classic + BigTIFF, strips +
       tiles, single-band, GDAL geo-keys → `GeoTransform`/`epsg`/`nodata`
       (`src/geotiff.rs`)
+- [x] GeoTIFF writer — `geotiff::write` emits a classic little-endian, uncompressed,
+      single-band, single-strip file with the transform, EPSG (GeoKeys) and nodata
+      (GDAL tag 42113) written; read back by the parser and checked with rasterio
+      (`src/geotiff.rs`)
 - [x] DEFLATE / LZW decompression support — `flate2` (rust_backend, no C) for
       DEFLATE, `weezl` for LZW, plus PackBits; horizontal (2) and floating-point (3)
       predictors (`src/geotiff.rs`)
@@ -486,7 +490,7 @@ the same logic, not real GDAL/QGIS/libtiff output; add third-party fixtures.
       - Also done: `.prj` for shapefiles written from GeoJSON (WGS84) or shapefiles.
       - Open: WKT `EMPTY` (the model has no empty geometries), GeoPackage
         WITHOUT ROWID and R-tree tables.
-- [ ] Raster: multi-band, ZSTD, overview IFDs, GeoTIFF/COG writer
+- [ ] Raster: multi-band, overview IFDs, COG writer (single-band GeoTIFF writer done)
       - Done: PixelIsPoint georeferencing (the origin moves half a pixel); ZSTD decoding
         (`ruzstd`, decode only). Tests cover raw-block frames; real compressed streams are
         exercised by the decoder's own tests, not by ours.

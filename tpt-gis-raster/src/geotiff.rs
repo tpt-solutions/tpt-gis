@@ -1339,6 +1339,303 @@ mod byte_ops {
 
 use byte_ops::FromBytes;
 
+// ---------------------------------------------------------------------------
+// Writing
+// ---------------------------------------------------------------------------
+
+const TAG_IMAGE_WIDTH: u16 = 256;
+const TAG_IMAGE_LENGTH: u16 = 257;
+const TAG_BITS_PER_SAMPLE: u16 = 258;
+const TAG_COMPRESSION: u16 = 259;
+const TAG_PHOTOMETRIC: u16 = 262;
+const TAG_STRIP_OFFSETS: u16 = 273;
+const TAG_SAMPLES_PER_PIXEL: u16 = 277;
+const TAG_ROWS_PER_STRIP: u16 = 278;
+const TAG_STRIP_BYTE_COUNTS: u16 = 279;
+const TAG_PLANAR_CONFIG: u16 = 284;
+const TAG_SAMPLE_FORMAT: u16 = 339;
+
+/// Encodes a band as a classic little-endian GeoTIFF: uncompressed, one strip, one
+/// sample per pixel, with the band's transform, EPSG code (when known) and nodata value
+/// (when set) written as the usual GeoTIFF and GDAL tags.
+///
+/// Geographic EPSG codes (4000 to 4999) are written as geographic CRS keys; every other
+/// code is written as a projected CRS key. The output reads back through [`read`].
+///
+/// # Errors
+/// Returns [`GeoTiffError::Unsupported`] if the raster is empty, the EPSG code does not
+/// fit in a GeoKey, or the file would exceed the 4 GiB limit of classic TIFF.
+pub fn write(band: &AnyBand) -> Result<Vec<u8>> {
+    let too_large = || GeoTiffError::Unsupported("raster exceeds the 4 GiB limit of classic TIFF");
+    if band.width() == 0 || band.height() == 0 {
+        return Err(GeoTiffError::Unsupported("an empty raster has no TIFF representation"));
+    }
+    let samples = samples_of_band(band);
+    let data_len = u32::try_from(samples.bytes.len()).map_err(|_| too_large())?;
+    let width = u32::try_from(band.width()).map_err(|_| too_large())?;
+    let height = u32::try_from(band.height()).map_err(|_| too_large())?;
+    let gt = band.transform();
+
+    let mut fields = vec![
+        Field::new(TAG_IMAGE_WIDTH, TYPE_LONG, longs(&[width])),
+        Field::new(TAG_IMAGE_LENGTH, TYPE_LONG, longs(&[height])),
+        Field::new(TAG_BITS_PER_SAMPLE, TYPE_SHORT, shorts(&[samples.bits])),
+        Field::new(TAG_COMPRESSION, TYPE_SHORT, shorts(&[COMPRESSION_NONE])),
+        Field::new(TAG_PHOTOMETRIC, TYPE_SHORT, shorts(&[1])),
+        // The pixel data starts right after the 8-byte file header.
+        Field::new(TAG_STRIP_OFFSETS, TYPE_LONG, longs(&[8])),
+        Field::new(TAG_SAMPLES_PER_PIXEL, TYPE_SHORT, shorts(&[1])),
+        Field::new(TAG_ROWS_PER_STRIP, TYPE_LONG, longs(&[height])),
+        Field::new(TAG_STRIP_BYTE_COUNTS, TYPE_LONG, longs(&[data_len])),
+        Field::new(TAG_PLANAR_CONFIG, TYPE_SHORT, shorts(&[1])),
+        Field::new(TAG_SAMPLE_FORMAT, TYPE_SHORT, shorts(&[samples.format])),
+        Field::new(
+            TAG_MODEL_PIXEL_SCALE,
+            TYPE_DOUBLE,
+            doubles(&[gt.pixel_width(), gt.pixel_height(), 0.0]),
+        ),
+        Field::new(
+            TAG_MODEL_TIEPOINT,
+            TYPE_DOUBLE,
+            doubles(&[0.0, 0.0, 0.0, gt.origin_x(), gt.origin_y(), 0.0]),
+        ),
+    ];
+    if let Some(code) = band.epsg() {
+        let code = u16::try_from(code)
+            .map_err(|_| GeoTiffError::Unsupported("EPSG code does not fit in a GeoKey"))?;
+        let geographic = (4000..5000).contains(&code);
+        let (model_type, crs_key) =
+            if geographic { (2, GEOKEY_GEOGRAPHIC_TYPE) } else { (1, GEOKEY_PROJECTED_TYPE) };
+        // Header (version 1, revision 1.0, three keys), then [key, location, count, value]
+        // for each key, in ascending key order.
+        let keys = shorts(&[
+            1,
+            1,
+            0,
+            3, //
+            1024,
+            0,
+            1,
+            model_type, //
+            GEOKEY_RASTER_TYPE,
+            0,
+            1,
+            1, //
+            crs_key,
+            0,
+            1,
+            code,
+        ]);
+        fields.push(Field::new(TAG_GEO_KEY_DIRECTORY, TYPE_SHORT, keys));
+    }
+    if let Some(text) = &samples.nodata {
+        let mut bytes = text.clone().into_bytes();
+        bytes.push(0);
+        fields.push(Field::new(TAG_GDAL_NODATA, TYPE_ASCII, bytes));
+    }
+    fields.sort_by_key(|field| field.tag);
+
+    let mut out = Vec::with_capacity(8 + samples.bytes.len() + 512);
+    out.extend_from_slice(b"II");
+    out.extend_from_slice(&42u16.to_le_bytes());
+    out.extend_from_slice(&[0; 4]); // IFD offset, patched once the layout is known
+    out.extend_from_slice(&samples.bytes);
+    pad_to_word(&mut out);
+    for field in &mut fields {
+        if field.payload.len() > 4 {
+            field.offset = u32::try_from(out.len()).map_err(|_| too_large())?;
+            out.extend_from_slice(&field.payload);
+            pad_to_word(&mut out);
+        }
+    }
+
+    let ifd = u32::try_from(out.len()).map_err(|_| too_large())?;
+    out.extend_from_slice(&(fields.len() as u16).to_le_bytes());
+    for field in &fields {
+        out.extend_from_slice(&field.tag.to_le_bytes());
+        out.extend_from_slice(&field.field_type.to_le_bytes());
+        out.extend_from_slice(&field.count.to_le_bytes());
+        if field.payload.len() > 4 {
+            out.extend_from_slice(&field.offset.to_le_bytes());
+        } else {
+            let mut inline = field.payload.clone();
+            inline.resize(4, 0);
+            out.extend_from_slice(&inline);
+        }
+    }
+    out.extend_from_slice(&0u32.to_le_bytes()); // no further IFDs
+    out[4..8].copy_from_slice(&ifd.to_le_bytes());
+    Ok(out)
+}
+
+/// One band's little-endian pixel bytes and the tags that describe them.
+struct Samples {
+    bytes: Vec<u8>,
+    bits: u16,
+    format: u16,
+    nodata: Option<String>,
+}
+
+macro_rules! samples_of {
+    ($band:expr, $ty:ty, $bits:expr, $format:expr) => {{
+        let band = $band;
+        let mut bytes = Vec::with_capacity(band.grid().len() * core::mem::size_of::<$ty>());
+        for cell in band.grid().cells() {
+            bytes.extend_from_slice(&cell.to_le_bytes());
+        }
+        Samples {
+            bytes,
+            bits: $bits,
+            format: $format,
+            nodata: band.nodata().map(ToString::to_string),
+        }
+    }};
+}
+
+fn samples_of_band(band: &AnyBand) -> Samples {
+    match band {
+        AnyBand::U8(b) => samples_of!(b, u8, 8, SAMPLEFORMAT_UINT),
+        AnyBand::U16(b) => samples_of!(b, u16, 16, SAMPLEFORMAT_UINT),
+        AnyBand::I16(b) => samples_of!(b, i16, 16, SAMPLEFORMAT_INT),
+        AnyBand::U32(b) => samples_of!(b, u32, 32, SAMPLEFORMAT_UINT),
+        AnyBand::I32(b) => samples_of!(b, i32, 32, SAMPLEFORMAT_INT),
+        AnyBand::F32(b) => samples_of!(b, f32, 32, SAMPLEFORMAT_FLOAT),
+        AnyBand::F64(b) => samples_of!(b, f64, 64, SAMPLEFORMAT_FLOAT),
+    }
+}
+
+/// One IFD entry before layout: its payload is stored inline when it fits in four bytes
+/// and at `offset` otherwise.
+struct Field {
+    tag: u16,
+    field_type: u16,
+    count: u32,
+    payload: Vec<u8>,
+    offset: u32,
+}
+
+impl Field {
+    fn new(tag: u16, field_type: u16, payload: Vec<u8>) -> Self {
+        let size = type_size(field_type).unwrap_or(1);
+        Field { tag, field_type, count: (payload.len() / size) as u32, payload, offset: 0 }
+    }
+}
+
+fn pad_to_word(out: &mut Vec<u8>) {
+    if out.len() % 2 == 1 {
+        out.push(0);
+    }
+}
+
+fn shorts(values: &[u16]) -> Vec<u8> {
+    values.iter().flat_map(|v| v.to_le_bytes()).collect()
+}
+
+fn longs(values: &[u32]) -> Vec<u8> {
+    values.iter().flat_map(|v| v.to_le_bytes()).collect()
+}
+
+fn doubles(values: &[f64]) -> Vec<u8> {
+    values.iter().flat_map(|v| v.to_le_bytes()).collect()
+}
+
+#[cfg(test)]
+mod write_tests {
+    use super::*;
+    use crate::cell::CellKind;
+
+    fn gt() -> GeoTransform {
+        GeoTransform::new(500_000.0, 5_400_000.0, 10.0, 10.0)
+    }
+
+    fn values(band: &AnyBand) -> Vec<f64> {
+        let mut out = Vec::new();
+        for y in 0..band.height() {
+            for x in 0..band.width() {
+                out.push(band.value_at_f64(x, y).unwrap_or(f64::NAN));
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn round_trips_u8_with_georeference_and_nodata() {
+        let grid = Grid::new(3, 2, vec![1u8, 2, 3, 4, 5, 255]).unwrap();
+        let band = Band::new(grid, gt()).with_epsg(32633).with_nodata(255);
+        let back = read(&write(&AnyBand::U8(band)).unwrap()).unwrap();
+
+        assert_eq!(back.kind(), CellKind::U8);
+        assert_eq!((back.width(), back.height()), (3, 2));
+        assert_eq!(back.epsg(), Some(32633));
+        assert_eq!(back.transform().to_gdal(), gt().to_gdal());
+        // Nodata cells read back as NaN through the f64 accessor.
+        let got = values(&back);
+        assert_eq!(&got[..5], &[1.0, 2.0, 3.0, 4.0, 5.0]);
+        assert!(got[5].is_nan());
+        match back {
+            AnyBand::U8(b) => assert_eq!(b.nodata(), Some(&255)),
+            _ => panic!("wrong kind read back"),
+        }
+    }
+
+    #[test]
+    fn every_cell_type_survives_a_round_trip() {
+        let bands = vec![
+            AnyBand::U8(Band::new(Grid::new(2, 1, vec![0u8, 255]).unwrap(), gt())),
+            AnyBand::U16(Band::new(Grid::new(2, 1, vec![0u16, 65_535]).unwrap(), gt())),
+            AnyBand::I16(Band::new(Grid::new(2, 1, vec![-32_768i16, 32_767]).unwrap(), gt())),
+            AnyBand::U32(Band::new(Grid::new(2, 1, vec![0u32, u32::MAX]).unwrap(), gt())),
+            AnyBand::I32(Band::new(Grid::new(2, 1, vec![i32::MIN, i32::MAX]).unwrap(), gt())),
+            AnyBand::F32(Band::new(Grid::new(2, 1, vec![-1.5f32, 2.25]).unwrap(), gt())),
+            AnyBand::F64(Band::new(Grid::new(2, 1, vec![0.1f64, -2.25e300]).unwrap(), gt())),
+        ];
+        for band in bands {
+            let back = read(&write(&band).unwrap()).unwrap();
+            assert_eq!(back.kind(), band.kind());
+            assert_eq!(values(&back), values(&band), "{:?}", band.kind());
+        }
+    }
+
+    #[test]
+    fn nan_nodata_is_written_and_read_back() {
+        let band = Band::new(Grid::new(1, 1, vec![1.0f32]).unwrap(), gt()).with_nodata(f32::NAN);
+        let back = read(&write(&AnyBand::F32(band)).unwrap()).unwrap();
+        match back {
+            AnyBand::F32(b) => assert!(b.nodata().is_some_and(|v| v.is_nan())),
+            _ => panic!("wrong kind read back"),
+        }
+    }
+
+    #[test]
+    fn geographic_and_unreferenced_bands_keep_their_crs_state() {
+        let geo = Band::new(Grid::new(1, 1, vec![7i16]).unwrap(), gt()).with_epsg(4326);
+        let back = read(&write(&AnyBand::I16(geo)).unwrap()).unwrap();
+        assert_eq!(back.epsg(), Some(4326));
+
+        let bare = Band::new(Grid::new(1, 1, vec![7i16]).unwrap(), gt());
+        let back = read(&write(&AnyBand::I16(bare)).unwrap()).unwrap();
+        assert_eq!(back.epsg(), None);
+    }
+
+    #[test]
+    fn writes_the_header_and_ifd_offset_of_a_classic_little_endian_file() {
+        let band = Band::new(Grid::new(2, 2, vec![10u8, 20, 30, 40]).unwrap(), gt());
+        let bytes = write(&AnyBand::U8(band)).unwrap();
+        assert_eq!(&bytes[0..4], &[b'I', b'I', 42, 0]);
+        // Pixel data sits right after the header.
+        assert_eq!(&bytes[8..12], &[10, 20, 30, 40]);
+        let ifd = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]) as usize;
+        assert_eq!(ifd % 2, 0);
+        assert!(ifd > 12);
+    }
+
+    #[test]
+    fn empty_rasters_are_refused() {
+        let band = Band::new(Grid::<u8>::new(0, 0, Vec::new()).unwrap(), gt());
+        assert!(matches!(write(&AnyBand::U8(band)), Err(GeoTiffError::Unsupported(_))));
+    }
+}
+
 /// Helpers for building in-memory TIFF fixtures, used by the crate's own tests
 /// and by documentation examples. Not part of the supported API surface.
 pub mod testsupport {
