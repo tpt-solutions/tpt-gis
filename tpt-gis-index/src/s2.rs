@@ -342,6 +342,25 @@ fn uv_to_st(u: f64) -> f64 {
     }
 }
 
+/// The same-level cell `(di, dj)` steps away from `cell` in face-local `(i, j)` space.
+///
+/// Steps that leave the face are handled by projecting the offset centre back onto the
+/// sphere and reading off the face it lands on, so the result is correct across cube
+/// edges and corners as well.
+fn neighbour(cell: S2CellId, di: i64, dj: i64) -> S2CellId {
+    let level = cell.level() as u32;
+    let n = (1u64 << level) as f64;
+    let (i, j) = cell.ij();
+    let s = (i as f64 + 0.5 + di as f64) / n;
+    let t = (j as f64 + 0.5 + dj as f64) / n;
+    let (x, y, z) = face_uv_to_xyz(cell.face(), st_to_uv(s), st_to_uv(t));
+    let (face, u, v) = face_uv_from_xyz(x, y, z);
+    let shift = u32::from(MAX_LEVEL) - level;
+    let i = st_to_ij(uv_to_st(u)) >> shift;
+    let j = st_to_ij(uv_to_st(v)) >> shift;
+    S2CellId::from_face_ij(face, i, j, level as u8)
+}
+
 /// Maps a linear `s`/`t` in `[0, 1]` to a cell index in `0..2^MAX_LEVEL`. This is
 /// the exact inverse of [`ij_to_st`] (which returns a centre in `[0, 1]`).
 fn st_to_ij(s: f64) -> u64 {
@@ -353,6 +372,84 @@ fn st_to_ij(s: f64) -> u64 {
 /// Maps a cell index `pos` at `level` to the centre `s`/`t` in `(0, 1)`.
 fn ij_to_st(pos: u64, level: u32) -> f64 {
     (pos as f64 + 0.5) / (1u64 << level) as f64
+}
+
+/// Covers a polygon with S2 cells at `level`: the cells whose centres lie inside it.
+///
+/// `exterior` and `holes` are rings of `(longitude, latitude)` points in degrees, as for
+/// `tpt_gis_geom::Polygon`; containment is tested in that planar lon/lat frame, so polygons
+/// that cross the antimeridian are not handled. Rings need not be closed.
+///
+/// The cells are found by seeding from the cells around each exterior vertex and then
+/// flood filling through 8-neighbours whose centres are inside. Cells that the polygon only
+/// touches along an edge can be missed, as with `h3::polygon_cells`.
+///
+/// Returns `None` if a coordinate is not a finite, in-range latitude/longitude or if `level`
+/// exceeds [`MAX_LEVEL`]. Returns an empty vector for an exterior with fewer than three points.
+/// The result is sorted.
+#[must_use]
+pub fn polygon_cells(
+    exterior: &[tpt_gis_geom::Point],
+    holes: &[&[tpt_gis_geom::Point]],
+    level: u8,
+) -> Option<Vec<S2CellId>> {
+    if level > MAX_LEVEL {
+        return None;
+    }
+    let valid = |p: &tpt_gis_geom::Point| {
+        p.x.is_finite()
+            && p.y.is_finite()
+            && (-90.0..=90.0).contains(&p.y)
+            && (-180.0..=180.0).contains(&p.x)
+    };
+    if !exterior.iter().all(valid) || !holes.iter().all(|h| h.iter().all(valid)) {
+        return None;
+    }
+    if exterior.len() < 3 {
+        return Some(Vec::new());
+    }
+
+    let polygon = tpt_gis_geom::Polygon::new(exterior, holes);
+    let inside = |cell: S2CellId| {
+        let (lat, lon) = cell.to_lat_lon_degrees();
+        polygon.contains_point(tpt_gis_geom::Point::new(lon, lat))
+    };
+
+    let mut seen: std::collections::HashSet<S2CellId> = std::collections::HashSet::new();
+    let mut stack: Vec<S2CellId> = Vec::new();
+    for vertex in exterior {
+        let Some(cell) =
+            S2CellId::try_from_lat_lon(vertex.y.to_radians(), vertex.x.to_radians(), level)
+        else {
+            continue;
+        };
+        for di in -1..=1 {
+            for dj in -1..=1 {
+                let candidate = neighbour(cell, di, dj);
+                if seen.insert(candidate) && inside(candidate) {
+                    stack.push(candidate);
+                }
+            }
+        }
+    }
+
+    let mut out = Vec::new();
+    while let Some(cell) = stack.pop() {
+        out.push(cell);
+        for di in -1..=1 {
+            for dj in -1..=1 {
+                if di == 0 && dj == 0 {
+                    continue;
+                }
+                let candidate = neighbour(cell, di, dj);
+                if seen.insert(candidate) && inside(candidate) {
+                    stack.push(candidate);
+                }
+            }
+        }
+    }
+    out.sort_unstable();
+    Some(out)
 }
 
 #[cfg(test)]
@@ -479,5 +576,144 @@ mod tests {
     #[should_panic(expected = "out of range")]
     fn infallible_constructor_still_panics_on_bad_input() {
         let _ = S2CellId::from_lat_lon_degrees(f64::NAN, 0.0);
+    }
+}
+
+#[cfg(test)]
+mod covering_tests {
+    use super::*;
+    use std::collections::HashSet;
+    use tpt_gis_geom::Point;
+
+    fn pts(coords: &[(f64, f64)]) -> Vec<Point> {
+        coords.iter().map(|&(x, y)| Point::new(x, y)).collect()
+    }
+
+    /// Reference: every cell a dense lon/lat lattice over the polygon's box (plus margin)
+    /// lands in, kept when its centre is inside the polygon.
+    fn brute_force(exterior: &[Point], holes: &[&[Point]], level: u8) -> Vec<S2CellId> {
+        let polygon = tpt_gis_geom::Polygon::new(exterior, holes);
+        let (mut x0, mut x1, mut y0, mut y1) = (f64::MAX, f64::MIN, f64::MAX, f64::MIN);
+        for p in exterior {
+            x0 = x0.min(p.x);
+            x1 = x1.max(p.x);
+            y0 = y0.min(p.y);
+            y1 = y1.max(p.y);
+        }
+        let margin = 0.5;
+        let step = 0.003;
+        let mut cells = HashSet::new();
+        let mut y = y0 - margin;
+        while y <= y1 + margin {
+            let mut x = x0 - margin;
+            while x <= x1 + margin {
+                if let Some(cell) =
+                    S2CellId::try_from_lat_lon(y.to_radians(), x.to_radians(), level)
+                {
+                    cells.insert(cell);
+                }
+                x += step;
+            }
+            y += step;
+        }
+        let mut out: Vec<S2CellId> = cells
+            .into_iter()
+            .filter(|c| {
+                let (lat, lon) = c.to_lat_lon_degrees();
+                polygon.contains_point(Point::new(lon, lat))
+            })
+            .collect();
+        out.sort_unstable();
+        out
+    }
+
+    #[test]
+    fn neighbour_is_symmetric_and_adjacent_on_every_face() {
+        // Sample cells on all six faces, including the corners where four cells meet.
+        let seeds = [
+            (0.0, 0.0),
+            (0.0, 90.0),
+            (0.0, 180.0),
+            (0.0, -90.0),
+            (89.0, 0.0),
+            (-89.0, 45.0),
+            (45.0, 45.0),
+        ];
+        for (lat, lon) in seeds {
+            let cell = S2CellId::from_lat_lon_degrees(lat, lon).parent(6);
+            for (di, dj) in [(1, 0), (0, 1), (-1, 0), (0, -1), (1, 1), (-1, -1)] {
+                let there = neighbour(cell, di, dj);
+                assert_eq!(there.level(), 6);
+                assert_eq!(neighbour(there, -di, -dj), cell, "lat {lat} lon {lon}");
+            }
+            // A direct neighbour's centre is about one cell width away, not across the sphere.
+            // Measured as the angle between the centres, since longitude differences blow up
+            // near the poles.
+            let (clat, clon) = cell.to_lat_lon_degrees();
+            let (nlat, nlon) = neighbour(cell, 1, 0).to_lat_lon_degrees();
+            let unit = |la: f64, lo: f64| {
+                let (la, lo) = (la.to_radians(), lo.to_radians());
+                [la.cos() * lo.cos(), la.cos() * lo.sin(), la.sin()]
+            };
+            let (a, b) = (unit(clat, clon), unit(nlat, nlon));
+            let angle = (a[0] * b[0] + a[1] * b[1] + a[2] * b[2]).clamp(-1.0, 1.0).acos();
+            assert!(angle.to_degrees() < 15.0, "lat {lat} lon {lon}: {}", angle.to_degrees());
+        }
+    }
+
+    #[test]
+    fn convex_polygon_matches_brute_force() {
+        // A triangle across the Atlantic coast of France.
+        let ext = pts(&[(-2.0, 46.0), (0.5, 46.5), (-0.5, 48.0)]);
+        let got = polygon_cells(&ext, &[], 8).unwrap();
+        assert!(!got.is_empty());
+        assert_eq!(got, brute_force(&ext, &[], 8));
+    }
+
+    #[test]
+    fn concave_polygon_with_hole_matches_brute_force() {
+        let ext = pts(&[
+            (10.0, 40.0),
+            (11.5, 40.0),
+            (11.5, 40.7),
+            (10.7, 40.7),
+            (10.7, 41.5),
+            (10.0, 41.5),
+        ]);
+        let hole = pts(&[(10.2, 40.2), (10.4, 40.2), (10.4, 40.4), (10.2, 40.4)]);
+        let holes: [&[Point]; 1] = [&hole];
+        let got = polygon_cells(&ext, &holes, 8).unwrap();
+        assert_eq!(got, brute_force(&ext, &holes, 8));
+    }
+
+    #[test]
+    fn polygon_around_a_cube_corner_matches_brute_force() {
+        // The cube corner (1, 1, 1) sits at lat 35.26, lon 45. Cells here are not
+        // mutually inverse under neighbour steps, so this checks the covering itself.
+        let ext = pts(&[(40.0, 30.0), (50.0, 30.0), (50.0, 40.0), (40.0, 40.0)]);
+        let got = polygon_cells(&ext, &[], 5).unwrap();
+        assert_eq!(got, brute_force(&ext, &[], 5));
+    }
+
+    #[test]
+    fn polygon_across_a_cube_edge_is_covered() {
+        // Straddles the lon 45 edge between faces 0 and 1 on the equator.
+        let ext = pts(&[(40.0, -3.0), (50.0, -3.0), (50.0, 3.0), (40.0, 3.0)]);
+        let got = polygon_cells(&ext, &[], 4).unwrap();
+        let faces: HashSet<u8> = got.iter().map(|c| c.face()).collect();
+        assert!(faces.len() >= 2, "expected several faces, got {faces:?}");
+        assert_eq!(got, brute_force(&ext, &[], 4));
+    }
+
+    #[test]
+    fn degenerate_and_invalid_inputs() {
+        let two = pts(&[(0.0, 0.0), (1.0, 1.0)]);
+        assert_eq!(polygon_cells(&two, &[], 5), Some(Vec::new()));
+        let ext = pts(&[(0.0, 0.0), (1.0, 0.0), (1.0, 1.0)]);
+        assert_eq!(polygon_cells(&ext, &[], MAX_LEVEL + 1), None);
+        let bad = pts(&[(0.0, f64::NAN), (1.0, 0.0), (1.0, 1.0)]);
+        assert_eq!(polygon_cells(&bad, &[], 5), None);
+        let out_of_range = pts(&[(0.0, 95.0), (1.0, 0.0), (1.0, 1.0)]);
+        assert_eq!(polygon_cells(&out_of_range, &[], 5), None);
     }
 }

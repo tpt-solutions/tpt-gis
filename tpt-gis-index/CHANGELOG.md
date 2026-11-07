@@ -5,6 +5,11 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+- `s2::polygon_cells` — S2 polygon covering at a chosen level: the cells whose centres lie
+  inside a lon/lat polygon, with holes honoured. Checked against a brute-force lattice
+  reference, including a polygon that crosses a cube edge and one around a cube corner.
+
 ## [0.1.0] - 2025-08-05
 
 ### Added

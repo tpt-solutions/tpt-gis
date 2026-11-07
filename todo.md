@@ -549,7 +549,8 @@ the same logic, not real GDAL/QGIS/libtiff output; add third-party fixtures.
         `polygon_intersection_join`, `nearest_polygon_join`.
       - Done: H3 polygon covering (`h3::polygon_cells`, the centroid-containment rule, checked
         against a brute-force lattice reference).
-      - Open: S2 polygon covering.
+      - Done: S2 polygon covering (`s2::polygon_cells`, centre containment, 8-neighbour flood
+        fill that crosses cube edges; brute-force checked, including a cube corner).
 
 ### 4.5 Innovation
 - [x] **Geofence compiler**: `tptgis geofence-compile in.geojson > fence.rs` emitting a
