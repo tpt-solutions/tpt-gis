@@ -11,7 +11,7 @@ about the code in this repository, not a release.
 
 | Operation | GDAL / OGR | tpt-gis | Status |
 |-----------|------------|---------|--------|
-| Convert between formats | `ogr2ogr` | `tptgis convert` | 🟡 GeoJSON, WKT, WKB, GeoPackage read and write; Shapefile read only |
+| Convert between formats | `ogr2ogr` | `tptgis convert` | 🟡 GeoJSON, WKT, WKB, GeoPackage, and Shapefile read and write; no `.prj` written |
 | Shapefile attributes | `.dbf` via OGR | `tptgis convert`, `tpt_gis_io::shapefile::read_dbf_with` | ✅ `.cpg` encodings (UTF-8, Latin-1, Windows-1252) |
 | Summary of a dataset | `ogrinfo -so` | `tptgis info` | ✅ counts, types, bounds, property names |
 | Vector reprojection | `ogr2ogr -t_srs` | `tptgis reproject` | 🟡 from WGS84 to Web Mercator or UTM only |

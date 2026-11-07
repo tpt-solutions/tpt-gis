@@ -480,8 +480,10 @@ the same logic, not real GDAL/QGIS/libtiff output; add third-party fixtures.
       - Also done: shapefile Z and M types read as 2D; `info` reports a shapefile's `.prj`.
       - Also done: `.cpg` encodings; `.dbf` attributes flow through `convert`, `info`, and
         `validate`.
-      - Open: WKT `EMPTY` (the model has no empty geometries), a shapefile writer,
-        GeoPackage WITHOUT ROWID and R-tree tables.
+      - Also done: a shapefile writer (`.shp`, `.shx`, `.dbf`, `.cpg`), checked by GDAL
+        (read through pyogrio).
+      - Open: WKT `EMPTY` (the model has no empty geometries), `.prj` output, GeoPackage
+        WITHOUT ROWID and R-tree tables.
 - [ ] Raster: multi-band, ZSTD, overview IFDs, GeoTIFF/COG writer
       - Done: PixelIsPoint georeferencing (the origin moves half a pixel); ZSTD decoding
         (`ruzstd`, decode only). Tests cover raw-block frames; real compressed streams are
