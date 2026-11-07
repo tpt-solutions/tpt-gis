@@ -37,7 +37,7 @@ use core::fmt;
 use crate::geometry::{Geometry, Point, Polygon};
 
 /// An error encountered while reading a `.shp` or `.dbf` file.
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ShapefileError {
     /// The `.shp` file header's File Code (bytes 0-3) was not `9994`.
     InvalidFileCode(i32),
@@ -54,6 +54,25 @@ pub enum ShapefileError {
     /// The input ended before a length-prefixed or fixed-size structure it was in the
     /// middle of reading was complete.
     UnexpectedEndOfInput,
+    /// The geometries mix shape types (for example points and polygons). A shapefile has
+    /// one shape type, so write each type to its own file.
+    MixedShapeTypes,
+    /// A geometry collection was given. Shapefiles have no such type.
+    GeometryCollectionUnsupported,
+    /// The file would be larger than the shapefile format allows (2 GiB).
+    FileTooLarge,
+    /// A dBASE field name is longer than 10 bytes or is not ASCII.
+    InvalidFieldName(String),
+    /// A value does not fit its dBASE field's width.
+    ValueTooWide {
+        /// The field the value was written to.
+        field: String,
+    },
+    /// A value's type does not match its dBASE field's type.
+    ValueTypeMismatch {
+        /// The field the value was written to.
+        field: String,
+    },
 }
 
 impl fmt::Display for ShapefileError {
@@ -76,6 +95,22 @@ impl fmt::Display for ShapefileError {
             }
             ShapefileError::UnexpectedEndOfInput => {
                 write!(f, "unexpected end of input")
+            }
+            ShapefileError::MixedShapeTypes => {
+                write!(f, "geometries mix shape types; a shapefile holds one type")
+            }
+            ShapefileError::GeometryCollectionUnsupported => {
+                write!(f, "shapefiles cannot store geometry collections")
+            }
+            ShapefileError::FileTooLarge => write!(f, "the shapefile would exceed 2 GiB"),
+            ShapefileError::InvalidFieldName(name) => {
+                write!(f, "dBASE field name {name:?} must be ASCII and at most 10 bytes")
+            }
+            ShapefileError::ValueTooWide { field } => {
+                write!(f, "a value is wider than its dBASE field {field:?}")
+            }
+            ShapefileError::ValueTypeMismatch { field } => {
+                write!(f, "a value's type does not match its dBASE field {field:?}")
             }
         }
     }

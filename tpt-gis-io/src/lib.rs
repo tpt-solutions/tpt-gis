@@ -17,6 +17,7 @@ pub mod geojson;
 pub mod geometry;
 pub mod geopackage;
 pub mod shapefile;
+pub mod shapefile_writer;
 pub mod wkb;
 pub mod wkt;
 
