@@ -9,8 +9,9 @@
 
 use pyo3::exceptions::{PyIOError, PyValueError};
 use pyo3::prelude::*;
+use pyo3::types::{PyBytes, PyDict, PyList, PyType};
 use pyo3::Bound;
-use pyo3::types::{PyDict, PyList, PyType};
+use std::hash::{DefaultHasher, Hash, Hasher};
 
 use tpt_gis_core::geodesic::{self, GeodesicError};
 use tpt_gis_core::{Ellipsoid, GeoPoint as CoreGeoPoint};
@@ -18,9 +19,95 @@ use tpt_gis_geom::Point as GeomPoint;
 use tpt_gis_io::geometry::Geometry as InnerGeometry;
 use tpt_gis_io::shapefile::DbfValue;
 
-/// Converts any of `tpt-gis`'s error types into a Python `ValueError`.
+pyo3::create_exception!(
+    _core,
+    TptGisError,
+    PyValueError,
+    "Base class for tpt-gis errors. It subclasses ValueError."
+);
+pyo3::create_exception!(
+    _core,
+    GeometryParseError,
+    TptGisError,
+    "A geometry string, buffer, or file could not be parsed."
+);
+pyo3::create_exception!(
+    _core,
+    GeodesyError,
+    TptGisError,
+    "A geodesic calculation got invalid input or did not converge."
+);
+
+/// Converts a geometry or file parse failure into a `GeometryParseError`.
 fn to_pyerr<E: std::fmt::Display>(e: E) -> PyErr {
-    PyValueError::new_err(e.to_string())
+    GeometryParseError::new_err(e.to_string())
+}
+
+/// Converts a geodesy failure into a `GeodesyError`.
+fn geodesy_err(e: GeodesicError) -> PyErr {
+    GeodesyError::new_err(match e {
+        GeodesicError::ConvergenceFailure => {
+            "geodesic inverse failed to converge (near-antipodal points)".to_string()
+        }
+        GeodesicError::InvalidInput => {
+            "invalid coordinates: values must be finite and latitude within [-90, 90]".to_string()
+        }
+    })
+}
+
+/// Hashes any `Hash` value to the `isize` Python expects from `__hash__`.
+fn hash_of<T: Hash>(value: &T) -> isize {
+    let mut hasher = DefaultHasher::new();
+    value.hash(&mut hasher);
+    hasher.finish() as isize
+}
+
+/// Every coordinate of a geometry, for `bounds`.
+fn collect_points(g: &InnerGeometry, out: &mut Vec<GeomPoint>) {
+    match g {
+        InnerGeometry::Point(p) => out.push(*p),
+        InnerGeometry::LineString(pts) | InnerGeometry::MultiPoint(pts) => out.extend(pts),
+        InnerGeometry::Polygon(p) => p.rings.iter().for_each(|r| out.extend(r)),
+        InnerGeometry::MultiLineString(lines) => lines.iter().for_each(|l| out.extend(l)),
+        InnerGeometry::MultiPolygon(polys) => {
+            polys.iter().flat_map(|p| p.rings.iter()).for_each(|r| out.extend(r))
+        }
+        InnerGeometry::GeometryCollection(items) => {
+            items.iter().for_each(|i| collect_points(i, out))
+        }
+    }
+}
+
+/// Planar area: polygon parts contribute their exterior minus holes.
+fn planar_area(g: &InnerGeometry) -> f64 {
+    match g {
+        InnerGeometry::Polygon(p) => {
+            let mut scratch = Vec::new();
+            p.as_geom(&mut scratch).area()
+        }
+        InnerGeometry::MultiPolygon(polys) => {
+            polys.iter().map(|p| planar_area(&InnerGeometry::Polygon(p.clone()))).sum()
+        }
+        InnerGeometry::GeometryCollection(items) => items.iter().map(planar_area).sum(),
+        _ => 0.0,
+    }
+}
+
+/// Planar length: line lengths, and polygon perimeters (all rings, holes included).
+fn planar_length(g: &InnerGeometry) -> f64 {
+    let path = |pts: &[GeomPoint]| -> f64 {
+        pts.windows(2).map(|w| tpt_gis_geom::distance::point_to_point(w[0], w[1])).sum()
+    };
+    match g {
+        InnerGeometry::LineString(pts) => path(pts),
+        InnerGeometry::MultiLineString(lines) => lines.iter().map(|l| path(l)).sum(),
+        InnerGeometry::Polygon(p) => p.rings.iter().map(|r| path(r)).sum(),
+        InnerGeometry::MultiPolygon(polys) => {
+            polys.iter().flat_map(|p| p.rings.iter()).map(|r| path(r)).sum()
+        }
+        InnerGeometry::GeometryCollection(items) => items.iter().map(planar_length).sum(),
+        _ => 0.0,
+    }
 }
 
 /// Resolves a named reference ellipsoid.
@@ -57,6 +144,22 @@ impl Point {
     fn __repr__(&self) -> String {
         format!("Point(x={}, y={})", self.x, self.y)
     }
+
+    fn __eq__(&self, other: &Bound<'_, PyAny>) -> bool {
+        other
+            .extract::<PyRef<'_, Point>>()
+            .is_ok_and(|o| self.x.to_bits() == o.x.to_bits() && self.y.to_bits() == o.y.to_bits())
+    }
+
+    fn __hash__(&self) -> isize {
+        hash_of(&(self.x.to_bits(), self.y.to_bits()))
+    }
+
+    /// Pickles as `Point(x, y)`.
+    fn __reduce__(&self, py: Python<'_>) -> PyResult<(PyObject, (f64, f64))> {
+        let cls = py.get_type::<Point>().into_any().unbind();
+        Ok((cls, (self.x, self.y)))
+    }
 }
 
 /// A geographic coordinate (angular position on an ellipsoid), in decimal degrees.
@@ -81,6 +184,23 @@ impl GeoPoint {
 
     fn __repr__(&self) -> String {
         format!("GeoPoint(lat_deg={}, lon_deg={})", self.lat_deg, self.lon_deg)
+    }
+
+    fn __eq__(&self, other: &Bound<'_, PyAny>) -> bool {
+        other.extract::<PyRef<'_, GeoPoint>>().is_ok_and(|o| {
+            self.lat_deg.to_bits() == o.lat_deg.to_bits()
+                && self.lon_deg.to_bits() == o.lon_deg.to_bits()
+        })
+    }
+
+    fn __hash__(&self) -> isize {
+        hash_of(&(self.lat_deg.to_bits(), self.lon_deg.to_bits()))
+    }
+
+    /// Pickles as `GeoPoint(lat_deg, lon_deg)`.
+    fn __reduce__(&self, py: Python<'_>) -> PyResult<(PyObject, (f64, f64))> {
+        let cls = py.get_type::<GeoPoint>().into_any().unbind();
+        Ok((cls, (self.lat_deg, self.lon_deg)))
     }
 }
 
@@ -119,25 +239,19 @@ impl Geometry {
     /// Parses a WKT (Well-Known Text) geometry string.
     #[classmethod]
     fn from_wkt(_cls: &Bound<'_, PyType>, s: &str) -> PyResult<Self> {
-        Ok(Geometry(
-            tpt_gis_io::wkt::parse_geometry(s).map_err(to_pyerr)?,
-        ))
+        Ok(Geometry(tpt_gis_io::wkt::parse_geometry(s).map_err(to_pyerr)?))
     }
 
     /// Parses a WKB (Well-Known Binary) geometry from bytes.
     #[classmethod]
     fn from_wkb(_cls: &Bound<'_, PyType>, b: &[u8]) -> PyResult<Self> {
-        Ok(Geometry(
-            tpt_gis_io::wkb::parse_geometry(b).map_err(to_pyerr)?,
-        ))
+        Ok(Geometry(tpt_gis_io::wkb::parse_geometry(b).map_err(to_pyerr)?))
     }
 
     /// Parses a GeoJSON geometry object from a JSON string.
     #[classmethod]
     fn from_geojson(_cls: &Bound<'_, PyType>, s: &str) -> PyResult<Self> {
-        Ok(Geometry(
-            tpt_gis_io::geojson::parse_geometry(s).map_err(to_pyerr)?,
-        ))
+        Ok(Geometry(tpt_gis_io::geojson::parse_geometry(s).map_err(to_pyerr)?))
     }
 
     /// Serializes this geometry to its WKT (Well-Known Text) representation.
@@ -191,6 +305,57 @@ impl Geometry {
     fn __repr__(&self) -> String {
         format!("Geometry({})", self.geometry_type())
     }
+
+    /// Equal when the two geometries have the same structure and coordinates.
+    fn __eq__(&self, other: &Bound<'_, PyAny>) -> bool {
+        other.extract::<PyRef<'_, Geometry>>().is_ok_and(|o| self.0 == o.0)
+    }
+
+    fn __hash__(&self) -> isize {
+        hash_of(&self.to_wkb())
+    }
+
+    /// Pickles as the geometry's WKB, rebuilt with `Geometry.from_wkb`.
+    fn __reduce__(&self, py: Python<'_>) -> PyResult<(PyObject, (PyObject,))> {
+        let from_wkb = py.get_type::<Geometry>().getattr("from_wkb")?.unbind();
+        let bytes = PyBytes::new(py, &self.to_wkb()).into_any().unbind();
+        Ok((from_wkb, (bytes,)))
+    }
+
+    /// The GeoJSON-geometry mapping, for the `__geo_interface__` protocol (used by
+    /// geopandas, shapely, and similar libraries).
+    #[getter]
+    fn __geo_interface__(&self, py: Python<'_>) -> PyResult<PyObject> {
+        let json = py.import("json")?;
+        Ok(json.call_method1("loads", (self.to_geojson(),))?.unbind())
+    }
+
+    /// The bounding box `(min_x, min_y, max_x, max_y)`, or `None` if there are no
+    /// coordinates.
+    #[getter]
+    fn bounds(&self) -> Option<(f64, f64, f64, f64)> {
+        let mut pts = Vec::new();
+        collect_points(&self.0, &mut pts);
+        pts.iter().fold(None, |acc, p| {
+            Some(match acc {
+                None => (p.x, p.y, p.x, p.y),
+                Some((a, b, c, d)) => (a.min(p.x), b.min(p.y), c.max(p.x), d.max(p.y)),
+            })
+        })
+    }
+
+    /// Planar area of the polygonal parts (zero for points and lines).
+    #[getter]
+    fn area(&self) -> f64 {
+        planar_area(&self.0)
+    }
+
+    /// Planar length: the length of lines, or the perimeter of polygons (holes
+    /// included). Zero for points.
+    #[getter]
+    fn length(&self) -> f64 {
+        planar_length(&self.0)
+    }
 }
 
 /// Geodesic (ellipsoidal) distance between two geographic points, in meters.
@@ -201,12 +366,7 @@ fn geodesic_distance(a: &GeoPoint, b: &GeoPoint, ellipsoid: &str) -> PyResult<f6
     let p2 = CoreGeoPoint::new(b.lat_deg, b.lon_deg);
     match geodesic::inverse(&ell, p1, p2) {
         Ok(r) => Ok(r.distance_m),
-        Err(GeodesicError::ConvergenceFailure) => Err(PyValueError::new_err(
-            "geodesic inverse failed to converge (near-antipodal points)",
-        )),
-        Err(GeodesicError::InvalidInput) => Err(PyValueError::new_err(
-            "invalid coordinates: values must be finite and latitude within [-90, 90]",
-        )),
+        Err(e) => Err(geodesy_err(e)),
     }
 }
 
@@ -222,12 +382,7 @@ fn geodesic_inverse(a: &GeoPoint, b: &GeoPoint, ellipsoid: &str) -> PyResult<PyI
             initial_bearing_deg: r.initial_bearing_deg,
             final_bearing_deg: r.final_bearing_deg,
         }),
-        Err(GeodesicError::ConvergenceFailure) => Err(PyValueError::new_err(
-            "geodesic inverse failed to converge (near-antipodal points)",
-        )),
-        Err(GeodesicError::InvalidInput) => Err(PyValueError::new_err(
-            "invalid coordinates: values must be finite and latitude within [-90, 90]",
-        )),
+        Err(e) => Err(geodesy_err(e)),
     }
 }
 
@@ -243,12 +398,9 @@ fn geodesic_destination(
     let ell = parse_ellipsoid(ellipsoid)?;
     let p0 = CoreGeoPoint::new(start.lat_deg, start.lon_deg);
     let dest = geodesic::direct(&ell, p0, initial_bearing_deg, distance_m)
-        .map_err(|_| PyValueError::new_err("invalid input for geodesic direct problem"))?
+        .map_err(geodesy_err)?
         .destination;
-    Ok(GeoPoint {
-        lat_deg: dest.lat_deg,
-        lon_deg: dest.lon_deg,
-    })
+    Ok(GeoPoint { lat_deg: dest.lat_deg, lon_deg: dest.lon_deg })
 }
 
 /// Reads every geometry record from a `.shp` file (the `.shx` index file is not needed).
@@ -289,6 +441,10 @@ fn read_shapefile_attributes(path: &str) -> PyResult<PyObject> {
 /// The native extension module, `tpt_gis_py._core`. The `tpt_gis_py` package re-exports it.
 #[pymodule]
 fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    let py = m.py();
+    m.add("TptGisError", py.get_type::<TptGisError>())?;
+    m.add("GeometryParseError", py.get_type::<GeometryParseError>())?;
+    m.add("GeodesyError", py.get_type::<GeodesyError>())?;
     m.add_class::<Geometry>()?;
     m.add_class::<Point>()?;
     m.add_class::<GeoPoint>()?;
@@ -298,5 +454,18 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(geodesic_destination, m)?)?;
     m.add_function(wrap_pyfunction!(read_shapefile_geometry, m)?)?;
     m.add_function(wrap_pyfunction!(read_shapefile_attributes, m)?)?;
+    // Report the public package name, not the private extension module. Pickle looks
+    // classes up by module and name, so this also makes the classes picklable.
+    for ty in [
+        "TptGisError",
+        "GeometryParseError",
+        "GeodesyError",
+        "Geometry",
+        "Point",
+        "GeoPoint",
+        "InverseResult",
+    ] {
+        m.getattr(ty)?.setattr("__module__", "tpt_gis_py")?;
+    }
     Ok(())
 }

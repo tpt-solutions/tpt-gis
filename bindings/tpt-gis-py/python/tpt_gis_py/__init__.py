@@ -8,6 +8,9 @@ from ._core import *  # noqa: F401,F403
 from ._core import __doc__ as _core_doc  # noqa: F401
 
 __all__ = [
+    "TptGisError",
+    "GeometryParseError",
+    "GeodesyError",
     "Geometry",
     "Point",
     "GeoPoint",
