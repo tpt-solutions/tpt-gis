@@ -60,8 +60,8 @@ Source design doc: `spec.txt`.
 - [x] `contains` predicate (point-in-polygon, polygon-in-polygon)
 - [x] `distance` operation (point-point, point-segment, point-linestring, plus
       nearest-point-on-boundary for polygons)
-- [x] `buffer` operation — points, lines and hole-free polygons, with round joins
-      (`buffer` module, `alloc` feature). Holes and erosion are not supported yet.
+- [x] `buffer` operation — points, lines, and polygons with round joins; holes shrink
+      (`buffer` module, `alloc` feature). Erosion of the exterior is not supported yet.
 - [x] `union` operation — Martinez–Rueda–Feito sweep (`clip` module, `alloc` feature)
 - [x] `difference` operation — same clipper (`clip::difference`)
 - [x] Floating-point tolerance handling for robust predicates (`predicates::EPSILON`)
@@ -462,8 +462,9 @@ the same logic, not real GDAL/QGIS/libtiff output; add third-party fixtures.
       - Decision (recommended option, followed): Martinez–Rueda–Feito sweep.
       - Done: `union`, `intersection`, `difference`, `symmetric_difference`
         (`clip`, `alloc` feature), tested against a point-membership oracle.
-      - Open: `buffer` for polygons with holes and for erosion; a balanced-tree
-        merge for buffers of very large inputs.
+      - Done since: buffers of polygons with holes (holes shrink).
+      - Open: buffer erosion (negative distances); a balanced-tree merge for buffers
+        of very large inputs.
 - [ ] CRS: Lambert Conformal Conic, Albers, generic Transverse Mercator, NAD83 /
       ETRS89 / BNG / Lambert-93 registry entries, general `transform(from, to)`
       - Done: LCC (with Lambert-93), Albers, generic Transverse Mercator (UTM is a

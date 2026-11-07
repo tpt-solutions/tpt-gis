@@ -37,8 +37,9 @@ tptgis spatial-join --points <points.geojson> --polygons <polygons.geojson> \
 tptgis reproject --input <input.geojson> --crs <target> [--output <out.geojson>]
 ```
 
-Targets: `web-mercator` (EPSG:3857), or `utm-<zone><n|s>` such as `utm-18n` or
-`utm-33s`. Every part of multi-part geometries and geometry collections is projected.
+Targets: `web-mercator` (EPSG:3857), `utm-<zone><n|s>` such as `utm-18n` or `utm-33s`,
+or an EPSG code the library knows: `EPSG:4326`, `EPSG:3857`, `EPSG:32601`–`EPSG:32660`,
+and `EPSG:32701`–`EPSG:32760`. Every part of multi-part geometries and geometry collections is projected.
 
 ## convert
 
@@ -66,6 +67,14 @@ tptgis convert --input roads.geojson --output roads.gpkg
 cat points.wkt | tptgis convert --input - --from wkt --to geojson
 ```
 
+## completions
+
+```sh
+tptgis completions bash > tptgis.bash   # also zsh, fish, powershell, elvish
+```
+
+Prints a shell completion script to standard output.
+
 ## info
 
 ```sh
@@ -75,6 +84,9 @@ tptgis info <file>
 Prints a JSON object with the format, feature count, features without geometry,
 geometry-type counts, the bounding box `[min_x, min_y, max_x, max_y]`, and the
 property names found across all features.
+
+For a GeoTIFF (`.tif`, `.tiff`), it reports the image size, cell type, EPSG code,
+origin and pixel size, and whether the image is tiled (with the tile size).
 
 ## validate
 

@@ -50,7 +50,7 @@ about the code in this repository, not a release.
 | `convex_hull` | `convex_hull` | `convex_hull` | ✅ allocation-free |
 | `simplify` | `simplify` | `simplify::simplify_into` (Douglas-Peucker) | ✅ |
 | `is_valid` | `is_valid` | `Polygon::is_valid` | 🟡 rings, self-intersection, holes inside the exterior |
-| `buffer` | `buffer` | `buffer::buffer_point`, `buffer_line`, `buffer_polygon` (`alloc`) | 🟡 round joins; hole-free polygons only; no erosion |
+| `buffer` | `buffer` | `buffer::buffer_point`, `buffer_line`, `buffer_polygon` (`alloc`) | 🟡 round joins; holes shrink; no erosion (negative distances) |
 | `union`, `intersection`, `difference`, `symmetric_difference` | same | `clip::union` and friends (`alloc`) | ✅ Martinez–Rueda–Feito sweep; holes and coincident edges handled |
 | Multi-part geometries | `Multi*` | `MultiPoint`, `MultiLineString`, `MultiPolygon`, `GeometryRef` | ✅ borrowed, zero-allocation |
 | Nearest feature | `nearest_points`, sjoin nearest | `RTree::nearest`, `spatial_join::nearest_polygon_join` | ✅ |

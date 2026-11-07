@@ -53,7 +53,7 @@ assert!(polygon.is_valid());
 
 With the `alloc` feature, `tpt_gis_geom::clip` provides `union`, `intersection`, `difference`
 and `symmetric_difference`, and `tpt_gis_geom::buffer` provides round-join buffers for points,
-lines, and hole-free polygons.
+lines, and polygons (holes shrink; negative distances are not supported).
 
 ## Reading and writing vector data
 
