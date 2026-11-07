@@ -5,6 +5,13 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+- `de9im::relate` (requires `alloc`) — the full DE-9IM intersection matrix of two geometries
+  (points, multi-points, line strings, multi-line strings, polygons, multi-polygons), with
+  `IntersectionMatrix::matches` for standard patterns such as `T*F**FFF*`. Checked against GEOS
+  on 1200 random pairs. Collections return `None`. The parts of a multi-polygon are assumed not
+  to overlap.
+
 ## [0.1.0] - 2025-08-05
 
 ### Added

@@ -22,6 +22,8 @@ pub mod bbox;
 pub mod buffer;
 #[cfg(feature = "alloc")]
 pub mod clip;
+#[cfg(feature = "alloc")]
+pub mod de9im;
 pub mod distance;
 pub mod hull;
 pub mod line_relate;

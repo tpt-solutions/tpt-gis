@@ -491,7 +491,9 @@ the same logic, not real GDAL/QGIS/libtiff output; add third-party fixtures.
         some part in the interior), checked against GEOS on the same 500 pairs.
       - Done: line-line `within` (`relate::linestring_within_linestring`), checked against GEOS
         on the same 600 pairs.
-      - Open: full DE-9IM.
+      - Done: full DE-9IM (`de9im::relate`, an `IntersectionMatrix` with `matches` patterns),
+        checked against GEOS on 1200 random point, line and polygon-with-hole pairs. Multi-polygon
+        parts are assumed not to overlap; collections are not supported.
       - Fixed: `clip` split nearly vertical edges in lexicographic order; a cut could fall
         before its edge's own endpoint, so union, intersection and difference were wrong
         for some inputs (union returned nothing). Found by the GEOS differential test.
