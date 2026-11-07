@@ -19,8 +19,8 @@ Source design doc: `spec.txt`.
 - [x] Set `license = "MIT OR Apache-2.0"` in every crate's `Cargo.toml`
 - [x] `README.md` (project overview, from spec Executive Summary)
 - [x] `CONTRIBUTING.md`
-- [x] `CODE_OF_CONDUCT.md` (placeholder contact email — update before going public)
-- [x] `SECURITY.md` (placeholder contact email — update before going public)
+- [x] ~~`CODE_OF_CONDUCT.md`~~ / ~~`SECURITY.md`~~ — removed (project is issues-only; no
+      placeholder contacts to maintain)
 - [x] `.gitignore`
 - [x] `rust-toolchain.toml` (channel = stable) + MSRV decision (1.81, in `Cargo.toml`)
 - [x] `rustfmt.toml` + clippy lint config (`clippy::all`; `pedantic` deliberately **not**
@@ -60,11 +60,10 @@ Source design doc: `spec.txt`.
 - [x] `contains` predicate (point-in-polygon, polygon-in-polygon)
 - [x] `distance` operation (point-point, point-segment, point-linestring, plus
       nearest-point-on-boundary for polygons)
-- [ ] `buffer` operation — still deferred, needs a general polygon-offsetting
-      algorithm (see crate-level doc comment)
-- [ ] `union` operation — still deferred, needs a general polygon-clipping
-      algorithm (Weiler-Atherton or Martinez-Rueda)
-- [ ] `difference` operation — same blocker as `union`
+- [x] `buffer` operation — points, lines and hole-free polygons, with round joins
+      (`buffer` module, `alloc` feature). Holes and erosion are not supported yet.
+- [x] `union` operation — Martinez–Rueda–Feito sweep (`clip` module, `alloc` feature)
+- [x] `difference` operation — same clipper (`clip::difference`)
 - [x] Floating-point tolerance handling for robust predicates (`predicates::EPSILON`)
 
 ### MVP 2 — Real-Time Drone Geofence & Navigation Engine
@@ -388,3 +387,139 @@ features from an earlier pass.
       session but aren't committed — `cargo package`/`cargo publish` only includes
       VCS-tracked files by default, so these need `git add`/commit before any
       crates.io publish
+
+---
+
+## Phase 4 — Platform review follow-ups (2026-11)
+
+Source: static review of all crates + CI/docs. Findings are **unverified until a
+failing test exists** — add the regression test first, then fix. Root cause for many
+raster/io bugs: `tpt-gis-raster/tests/gdal_parity.rs` compares against a naive copy of
+the same logic, not real GDAL/QGIS/libtiff output; add third-party fixtures.
+
+### 4.1 Correctness bugs — wrong results
+- [x] `tpt-gis-index` S2: `face_uv_to_xyz` face 5 returned `(-u,-v,1)` instead of
+      `(u,v,-1)`; regression tests added
+- [x] S2: reject invalid ids (face >= 6, `level()` underflow on id 0,
+      `from_lat_lon` level > 30, NaN/out-of-range lat/lon) instead of panicking
+- [x] S2: docs claim Google-S2 compatibility but ordering is Morton, tokens are fixed
+      16 hex digits — implement Hilbert + trimmed tokens, or fix `lib.rs` docs
+- [x] `polygon_contains_polygon`: ignores outer-polygon holes; rejects polygons that
+      touch the outer boundary (OGC `contains` allows boundary contact)
+- [x] `polygons_intersect`: hole edges never tested
+- [ ] `orientation`: absolute `EPSILON = 1e-9` is scale-dependent — relative epsilon
+      or Shewchuk adaptive predicates; define `point_in_ring` boundary behaviour
+- [ ] GeoPackage blob header: wrong flag bits (byte order = bit 0, envelope =
+      bits 1–3, empty = bit 4) and envelope sizes (32/48/64 B); verify against a
+      GDAL-written `.gpkg`
+- [ ] GeoPackage writer: set `application_id`/`user_version`, add srs rows 0 and -1,
+      sort/dedupe rowids, lift single-4KiB-page limit (>~250 vertices → `WriteTooLarge`)
+- [x] GeoPackage reader: tolerate rows with fewer columns than schema
+      (`ALTER TABLE ADD COLUMN`); don't swallow geometry decode errors
+- [x] TIFF predictor 2 (per-sample, honour byte order/bit depth) and predictor 3
+      (libtiff byte-plane algorithm)
+- [x] TIFF short last strip (height not multiple of `rows_per_strip`); windowed read
+      origin-Y when no geotransform
+- [x] HTTP COG reader: files < 1 MiB fail (`cache.get(0, PREFIX)`); IFD beyond 1 MiB
+      fails; cap chunked bodies; redirect/scheme limits; custom headers
+- [x] CLI `spatial-join`: honour polygon holes; handle/warn on Multi* geometries
+- [x] CLI `reproject`: Multi* / GeometryCollection pass through unprojected
+- [x] CLI: missing `format!` in unsupported-CRS error; `--format` should be a
+      `ValueEnum`; broken-pipe panic on stdout
+- [x] Local tangent plane: wrap antimeridian, guard poles, use ellipsoidal north scale
+- [ ] UTM: Norway (32V) / Svalbard exceptions, longitude wrapping, validate `Zone::new`,
+      reject NaN; Web Mercator wrapping/clamping
+- [x] `geocentric_to_geodetic` wrong at the poles
+- [x] Quadtree depth reset on `subdivide`
+
+### 4.2 Robustness — panics, hangs, DoS on untrusted input
+- [x] `geodesic::direct`: unbounded loop on NaN/inf — iteration cap + finite checks;
+      normalise output longitude
+- [x] SQLite reader: cycle/depth guard in `read_btree`; page number 0 underflow;
+      untrusted `payload_len` → `with_capacity`; unchecked `pos + len`
+- [x] `parse_create_table`: non-ASCII quoted name slice panic; quoted names with spaces
+- [ ] TIFF: IFD chain cycle (infinite loop); width 0 divide-by-zero; `u32`→`u16`
+      truncation; bounded `decode_lzw` (existing deferred item)
+- [x] Shapefile: 0-part polygon yields `rings: []` (later panics); swallowed header error
+- [x] R-tree `str_pack` panics on NaN bboxes — return `Result` or filter
+- [ ] Extend fuzz targets after each parser fix; run (not just compile) fuzzers on a schedule
+
+### 4.3 Hygiene
+- [x] Remove or implement unused `serde` / `alloc` features in core and geom
+- [x] Fix `tpt-gis-core/src/lib.rs` `std` doc comment (libm is used unconditionally)
+- [ ] Verify MSRV 1.81 for `no_std` float methods (`abs` etc.)
+- [ ] Commit `Cargo.lock` (repo ships a binary + Python extension)
+- [ ] Add real GDAL/QGIS/libtiff-produced fixtures to raster/io tests
+
+### 4.4 Missing features (by adoption value)
+- [x] `Multi*` + `GeometryCollection` in `tpt-gis-geom`
+- [ ] Geometry ops: area, centroid, convex hull, simplify, `is_valid`, segment
+      intersection point, touches/crosses/within/overlaps
+      - Done: area, centroid, convex hull, simplify, `is_valid` (basic), segment
+        intersection point, within, polygon touches/overlaps (`relate`, not DE-9IM).
+      - Open: `crosses`, line-polygon relations, full DE-9IM.
+- [ ] `buffer` / `union` / `difference` / `intersection`
+      - Decision (recommended option, followed): Martinez–Rueda–Feito sweep.
+      - Done: `union`, `intersection`, `difference`, `symmetric_difference`
+        (`clip`, `alloc` feature), tested against a point-membership oracle.
+      - Open: `buffer` for polygons with holes and for erosion; a balanced-tree
+        merge for buffers of very large inputs.
+- [ ] CRS: Lambert Conformal Conic, Albers, generic Transverse Mercator, NAD83 /
+      ETRS89 / BNG / Lambert-93 registry entries, general `transform(from, to)`
+      - Done: LCC (with Lambert-93), Albers, generic Transverse Mercator (UTM is a
+        special case), Web Mercator longitude wrapping.
+      - Open: EPSG registry entries, BNG (needs the OSTN15 grid), general transform.
+- [ ] Karney geodesics (fixes Vincenty antipodal failure), geodesic area/line sampling
+- [ ] I/O: ISO WKB Z/M + EWKB; WKT `EMPTY`/`Z`/`SRID=`; bare GeoJSON Feature/Geometry,
+      `properties: null`; shapefile `.prj`/`.cpg`/Z types + writer; GeoPackage
+      WITHOUT ROWID + R-tree tables
+- [ ] Raster: multi-band, ZSTD, overview IFDs, GeoTIFF/COG writer, PixelIsPoint
+- [ ] Index: R-tree remove + k-NN; polygon-polygon and nearest spatial joins;
+      H3/S2 polygon covering
+      - Done: `RTree::remove`, `RTree::nearest` / `nearest_iter`,
+        `polygon_intersection_join`, `nearest_polygon_join`.
+      - Open: H3/S2 polygon covering.
+
+### 4.5 Innovation
+- [x] **Geofence compiler**: `tptgis geofence-compile in.geojson > fence.rs` emitting a
+      `const` `no_std` zero-alloc polygon + bbox table for drone/IoT firmware
+- [ ] Browser/WASM playground (GitHub Pages): load GeoJSON, reproject, join client-side
+- [ ] `tptgis validate` / `doctor` for COG layout, GeoPackage, GeoJSON
+- [ ] `tptgis cog-tiles`: XYZ tile server over HTTP-range COGs
+- [ ] Differential tests against stored GDAL/PROJ/GEOS-generated fixtures
+
+### 4.6 CLI & Python usability
+- [ ] CLI subcommands: `info`, `convert` (GeoJSON/WKT/WKB/SHP/GPKG), raster/COG info;
+      stdin `-` support, `--verbose`, shell completions, `EPSG:xxxx` CRS args,
+      CSV header row + unquoted string values, file path in parse errors
+- [x] CLI: `run_with_args` should not call `process::exit` (testable); add
+      `tpt-gis-cli/tests`
+- [ ] Python: `.pyi` stubs + `py.typed`, `__geo_interface__`, bounds/area/length,
+      `__eq__`/`__hash__`/pickle, exception hierarchy, `allow_threads`, numpy
+      interop, zipped shapefile geometry+attributes, wheel matrix (aarch64,
+      musllinux, universal2), classifiers
+
+### 4.7 Docs & adoption
+- [ ] `docs/coming-from-gdal-proj-geos.md`: parity table + side-by-side with
+      shapely / geopandas / rasterio / `geo`
+- [x] Cookbook: reproject shapefile→GeoJSON, COG window read, spatial join, embedded
+      geofence, geodesic distance
+- [x] Fix `docs/getting-started.md` (use facade crate; cover raster, `http`, CLI, wasm)
+- [ ] Feature-flag table in crate READMEs; `[package.metadata.docs.rs]` on all crates
+- [ ] Supported CRS / format / operation matrix + FAQ; mdBook site on GitHub Pages
+- [ ] Re-run benchmarks in **release mode**; publish 10M-point comparison vs
+      GDAL/PostGIS/geopandas (current number is a debug build)
+- [ ] `cargo generate` templates (no_std geofence, wasm module, CLI tool); Dockerfile;
+      `.devcontainer`; `wasm-pack` npm package
+- [x] Remove now-unused `.github/PULL_REQUEST_TEMPLATE.md` (PRs not accepted) and add
+      `ISSUE_TEMPLATE/config.yml` with a Q&A/discussion link
+
+### 4.8 CI & release automation
+- [ ] `.github/dependabot.yml`; `concurrency` group; `Swatinem/rust-cache`; SHA-pin actions
+- [ ] Jobs: MSRV 1.81, `cargo-hack` feature powerset, `cargo doc -D warnings`,
+      doctests, `http` feature, `cargo-semver-checks`, coverage (llvm-cov → Codecov),
+      scheduled `cargo audit` / `cargo deny` advisories, scheduled fuzz runs
+- [ ] `release.yml`: ordered `cargo publish`, GitHub Release with changelog extraction,
+      prebuilt `tptgis` binaries, `cargo-binstall` metadata, Homebrew formula
+- [ ] Publish crates + wheels and tag a first release (nothing is on crates.io/PyPI yet;
+      README PyPI badge is dead until then)

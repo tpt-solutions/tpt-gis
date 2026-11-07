@@ -1,68 +1,122 @@
-# CLI Usage
+# CLI usage (`tptgis`)
 
-## spatial-join-cli
+`tptgis` is the command-line tool in the `tpt-gis-cli` crate. Install it from source
+with `cargo install --path tpt-gis-cli` (or run it in place with
+`cargo run -p tpt-gis-cli --bin tptgis -- <command> …`).
 
-The `spatial-join-cli` example is a command-line tool for spatial operations.
+Run `tptgis --help` or `tptgis <command> --help` for the authoritative flag list.
 
-### Subcommands
+| Command | Purpose |
+|---------|---------|
+| [`spatial-join`](#spatial-join) | Points-in-polygons join (holes and multi-part geometries honoured) |
+| [`reproject`](#reproject) | Reproject a GeoJSON file from WGS84 |
+| [`convert`](#convert) | Convert between GeoJSON, WKT, WKB, Shapefile, and GeoPackage |
+| [`info`](#info) | Summarise a vector file as JSON |
+| [`geofence-compile`](#geofence-compile) | Emit a `no_std` Rust module of polygon data |
+| [`generate-fixtures`](#generate-fixtures) | Write synthetic GeoJSON test data |
 
-#### spatial-join
-
-Run a spatial join between points and polygons.
-
-```sh
-cargo run -p spatial-join-cli -- spatial-join \
-  --points <points.geojson> \
-  --polygons <polygons.geojson> \
-  [--output <output.geojson>] \
-  [--format geojson|csv] \
-  [--incremental]
-```
-
-- `--points`: GeoJSON `FeatureCollection` containing `Point` features.
-- `--polygons`: GeoJSON `FeatureCollection` containing `Polygon` features.
-- `--output`: Output file path. Writes to stdout if omitted.
-- `--format`: Output format (`geojson` or `csv`). Default: `geojson`.
-- `--incremental`: Use incremental R-Tree insert instead of bulk loading.
-
-#### reproject
-
-Reproject a GeoJSON `FeatureCollection` from WGS84 to a target CRS.
+## spatial-join
 
 ```sh
-cargo run -p spatial-join-cli -- reproject \
-  --input <input.geojson> \
-  --crs <target-crs> \
-  [--output <output.geojson>]
+tptgis spatial-join --points <points.geojson> --polygons <polygons.geojson> \
+  [--output <out>] [--format geojson|csv] [--incremental]
 ```
 
-Supported target CRS values:
-- `web-mercator` — WGS84 to Web Mercator (EPSG:3857)
-- `utm-<zone><hemisphere>` — WGS84 to UTM, e.g. `utm-18n`, `utm-33s`
+- `--points`: GeoJSON `FeatureCollection`. `Point` and `MultiPoint` features are
+  joined; each member point keeps its feature's properties.
+- `--polygons`: GeoJSON `FeatureCollection`. `Polygon` features keep their holes;
+  `MultiPolygon` features are joined part by part under the same properties.
+- `--output`: file to write. Standard output if omitted.
+- `--format`: `geojson` (default) or `csv`.
+- `--incremental`: insert into the R-Tree one entry at a time instead of bulk loading.
 
-#### generate-fixtures
-
-Generate synthetic GeoJSON test fixtures for benchmarking.
+## reproject
 
 ```sh
-cargo run -p spatial-join-cli -- generate-fixtures \
-  [--points <count>] \
-  [--polygons <count>] \
-  [--seed <value>] \
-  --output <directory>
+tptgis reproject --input <input.geojson> --crs <target> [--output <out.geojson>]
 ```
 
-- `--points`: Number of random points to generate. Default: `10000`.
-- `--polygons`: Number of random polygons to generate. Default: `500`.
-- `--seed`: Random seed for reproducibility. Default: `42`.
-- `--output`: Output directory for generated files.
+Targets: `web-mercator` (EPSG:3857), or `utm-<zone><n|s>` such as `utm-18n` or
+`utm-33s`. Every part of multi-part geometries and geometry collections is projected.
 
-### Benchmarking
+## convert
 
-Run the throughput benchmark:
+```sh
+tptgis convert --input <file|-> [--output <file>] [--from <fmt>] [--to <fmt>]
+```
+
+Formats are inferred from extensions, or set with `--from` and `--to`:
+
+| Format | Extensions | Read | Write |
+|--------|------------|------|-------|
+| GeoJSON | `.geojson`, `.json` | yes | yes |
+| WKT | `.wkt` | yes (one geometry per line) | yes |
+| WKB | `.wkb` | yes (one geometry per file) | yes (as one `GeometryCollection`) |
+| Shapefile | `.shp` | yes (geometry only) | no |
+| GeoPackage | `.gpkg` | yes | yes (table `features`, geometry column `geom`, SRID 4326) |
+
+- Use `--input -` to read standard input; it needs `--from`.
+- Without `--output`, the result goes to standard output as GeoJSON unless `--to` is set.
+- Shapefile attributes (`.dbf`) are not read yet, so shapefile features have no properties.
+
+```sh
+tptgis convert --input roads.shp --output roads.geojson
+tptgis convert --input roads.geojson --output roads.gpkg
+cat points.wkt | tptgis convert --input - --from wkt --to geojson
+```
+
+## info
+
+```sh
+tptgis info <file>
+```
+
+Prints a JSON object with the format, feature count, features without geometry,
+geometry-type counts, the bounding box `[min_x, min_y, max_x, max_y]`, and the
+property names found across all features.
+
+## geofence-compile
+
+```sh
+tptgis geofence-compile --input <zones.geojson> [--output <fence.rs>]
+```
+
+Compiles `Polygon` and `MultiPolygon` features into Rust source for an embedded
+geofence. The output depends only on `tpt-gis-geom`, uses `'static` slices and
+`const` arrays, and allocates nothing. Each zone is a `Geofence` with a `name`, a
+`bbox`, an `exterior` ring, and `holes`:
+
+```rust
+mod fence;
+use tpt_gis_geom::{predicates::point_in_ring, Point};
+
+fn inside_no_fly_zone(p: Point) -> bool {
+    fence::GEOFENCES.iter().any(|z| {
+        z.bbox.contains_point(p)
+            && point_in_ring(p, z.exterior)
+            && !z.holes.iter().any(|h| point_in_ring(p, h))
+    })
+}
+```
+
+A feature's `name` property names its zone; otherwise zones are called `zone_<index>`.
+Multi-polygon parts become `<name>_<part>`. Non-finite coordinates are rejected.
+
+## generate-fixtures
+
+```sh
+tptgis generate-fixtures [--points <n>] [--polygons <n>] [--seed <n>] --output <dir>
+```
+
+Writes `points_<n>.geojson` and `polygons_<n>.geojson` into `<dir>`. Defaults: 10 000
+points, 500 polygons, seed 42.
+
+## Benchmarking
 
 ```sh
 cargo bench -p spatial-join-cli
 ```
 
-This benchmarks spatial join with 10,000 points and 500 polygons using both bulk-load and streaming R-Tree strategies.
+The criterion benchmark lives in `examples/spatial-join-cli` (kept out of the published
+`tpt-gis-cli` crate) and measures the spatial join with bulk-load and incremental R-Tree
+construction.
