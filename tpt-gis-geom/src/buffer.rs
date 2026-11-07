@@ -56,16 +56,34 @@ pub fn buffer_line(points: &[Point], distance: f64, segments: usize) -> Vec<Owne
 ///
 /// A hole's buffered region is the hole minus the buffer of its boundary (the eroded
 /// hole), so the result is the buffer of the exterior minus each eroded hole. Round
-/// joins are used throughout. Returns `None` for a negative distance (erosion of the
-/// exterior is not supported). A zero distance returns the polygon unchanged.
+/// joins are used throughout.
+///
+/// A negative distance erodes: the result is the polygon minus the buffer of every ring
+/// (the points inside it that are at least `|distance|` from its boundary). A zero
+/// distance returns the polygon unchanged. Returns `None` only for a NaN distance.
 #[must_use]
 pub fn buffer_polygon(
     polygon: &Polygon,
     distance: f64,
     segments: usize,
 ) -> Option<Vec<OwnedPolygon>> {
-    if distance.is_nan() || distance < 0.0 {
+    if distance.is_nan() {
         return None;
+    }
+    if distance < 0.0 {
+        let radius = -distance;
+        let mut region = alloc::vec![OwnedPolygon {
+            rings: core::iter::once(polygon.exterior)
+                .chain(polygon.interiors.iter().copied())
+                .map(|r| r.to_vec())
+                .collect(),
+        }];
+        for ring in core::iter::once(polygon.exterior).chain(polygon.interiors.iter().copied()) {
+            for cutter in buffer_line(ring, radius, segments) {
+                region = subtract_all(region, &cutter);
+            }
+        }
+        return Some(region);
     }
     if distance == 0.0 {
         let mut rings = alloc::vec![polygon.exterior.to_vec()];
@@ -306,6 +324,35 @@ mod tests {
         assert!(parts.iter().all(|p| p.rings.len() == 1), "{parts:?}");
     }
 
+    /// Erosion of a 10×10 square by 1 is the inner 8×8 square.
+    #[test]
+    fn erosion_shrinks_a_polygon() {
+        let ring = [
+            Point::new(0.0, 0.0),
+            Point::new(10.0, 0.0),
+            Point::new(10.0, 10.0),
+            Point::new(0.0, 10.0),
+            Point::new(0.0, 0.0),
+        ];
+        let parts = buffer_polygon(&Polygon::from_exterior(&ring), -1.0, 64).unwrap();
+        let area = total_area(&parts);
+        assert!(rel_err(area, 64.0) < 2e-3, "area {area}");
+    }
+
+    /// A polygon thinner than twice the erosion distance disappears.
+    #[test]
+    fn erosion_removes_thin_polygons() {
+        let ring = [
+            Point::new(0.0, 0.0),
+            Point::new(10.0, 0.0),
+            Point::new(10.0, 1.0),
+            Point::new(0.0, 1.0),
+            Point::new(0.0, 0.0),
+        ];
+        let parts = buffer_polygon(&Polygon::from_exterior(&ring), -0.6, 64).unwrap();
+        assert!(parts.is_empty() || total_area(&parts) < 1e-6, "{parts:?}");
+    }
+
     #[test]
     fn unsupported_inputs_are_refused() {
         let ring = [
@@ -314,7 +361,7 @@ mod tests {
             Point::new(4.0, 4.0),
             Point::new(0.0, 0.0),
         ];
-        assert!(buffer_polygon(&Polygon::from_exterior(&ring), -1.0, 8).is_none());
+        assert!(buffer_polygon(&Polygon::from_exterior(&ring), f64::NAN, 8).is_none());
         assert!(buffer_point(Point::new(0.0, 0.0), 0.0, 8).is_empty());
     }
 }
