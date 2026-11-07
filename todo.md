@@ -480,7 +480,8 @@ the same logic, not real GDAL/QGIS/libtiff output; add third-party fixtures.
       - Also done: shapefile Z and M types read as 2D; `info` reports a shapefile's `.prj`.
       - Open: WKT `EMPTY` (the model has no empty geometries), `.cpg` encodings, a
         shapefile writer, GeoPackage WITHOUT ROWID and R-tree tables.
-- [ ] Raster: multi-band, ZSTD, overview IFDs, GeoTIFF/COG writer, PixelIsPoint
+- [ ] Raster: multi-band, ZSTD, overview IFDs, GeoTIFF/COG writer
+      - Done: PixelIsPoint georeferencing (the origin moves half a pixel).
 - [ ] Index: R-tree remove + k-NN; polygon-polygon and nearest spatial joins;
       H3/S2 polygon covering
       - Done: `RTree::remove`, `RTree::nearest` / `nearest_iter`,
