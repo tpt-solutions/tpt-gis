@@ -70,7 +70,7 @@ fn ref_focal(band: &Band<f64>, radius: usize, stat: FocalStat) -> Band<f64> {
                     let mut v = values.clone();
                     v.sort_by(f64::total_cmp);
                     let m = v.len() / 2;
-                    if v.len() % 2 == 0 {
+                    if v.len().is_multiple_of(2) {
                         (v[m - 1] + v[m]) / 2.0
                     } else {
                         v[m]

@@ -12,8 +12,9 @@ pub struct Ellipsoid {
 impl Ellipsoid {
     /// Constructs an ellipsoid from its semi-major axis and inverse flattening (`1/f`).
     ///
-    /// Not `const`: floating-point arithmetic in `const fn` needs Rust 1.82, and this
-    /// crate supports 1.81. The built-in ellipsoids use struct literals in `const` items.
+    /// Not `const`: floating-point arithmetic in `const fn` needs Rust 1.82, and the MSRV
+    /// is older than that for this function. The built-in ellipsoids use struct literals in
+    /// `const` items.
     #[must_use]
     pub fn from_inverse_flattening(semi_major_axis: f64, inverse_flattening: f64) -> Self {
         Self { semi_major_axis, flattening: 1.0 / inverse_flattening }

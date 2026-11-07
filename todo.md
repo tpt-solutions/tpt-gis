@@ -22,7 +22,8 @@ Source design doc: `spec.txt`.
 - [x] ~~`CODE_OF_CONDUCT.md`~~ / ~~`SECURITY.md`~~ — removed (project is issues-only; no
       placeholder contacts to maintain)
 - [x] `.gitignore`
-- [x] `rust-toolchain.toml` (channel = stable) + MSRV decision (1.81, in `Cargo.toml`)
+- [x] `rust-toolchain.toml` (channel = stable) + MSRV decision (1.81, then 1.87 in `Cargo.toml`;
+      1.87 because `ruzstd` 0.9.1, which fixes RUSTSEC-2026-0344, declares rust-version 1.87)
 - [x] `rustfmt.toml` + clippy lint config (`clippy::all`; `pedantic` deliberately **not**
       enabled — too aggressive for math-heavy geodesy code with conventional short
       variable names like `a`, `b`, `e2`, `f`)

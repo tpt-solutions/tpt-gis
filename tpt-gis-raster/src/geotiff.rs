@@ -1231,7 +1231,7 @@ fn decode_packbits(raw: &[u8], expected: usize) -> Result<Vec<u8>> {
                 return Err(GeoTiffError::SizeMismatch("PackBits repeat"));
             }
             let byte = raw[i];
-            out.extend(core::iter::repeat(byte).take(count));
+            out.extend(core::iter::repeat_n(byte, count));
             i += 1;
         }
     }

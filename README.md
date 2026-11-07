@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/tpt-solutions/tpt-gis/actions/workflows/ci.yml/badge.svg)](https://github.com/tpt-solutions/tpt-gis/actions/workflows/ci.yml)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE-MIT)
-[![MSRV](https://img.shields.io/badge/MSRV-1.81-blue)](https://www.rust-lang.org)
+[![MSRV](https://img.shields.io/badge/MSRV-1.87-blue)](https://www.rust-lang.org)
 [![PyPI](https://img.shields.io/pypi/v/tpt-gis-py.svg)](https://pypi.org/project/tpt-gis-py/)
 
 A pure Rust, planetary-scale Geographic Information Systems engine — a zero-FFI

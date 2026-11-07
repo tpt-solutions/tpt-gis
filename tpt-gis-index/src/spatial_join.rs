@@ -342,7 +342,7 @@ pub fn nearest_polygon_join<P, Q>(
                 break;
             }
             let d = point_polygon_distance(pt.point, &polygons[j].polygon);
-            if best.map_or(true, |b| d < b.distance) {
+            if best.is_none_or(|b| d < b.distance) {
                 best = Some(NearestMatch { point: i, polygon: j, distance: d });
             }
         }

@@ -345,7 +345,7 @@ fn window_stat(values: &mut [f64], stat: FocalStat) -> Option<f64> {
             // keeps the sort total either way.
             values.sort_unstable_by(f64::total_cmp);
             let middle = values.len() / 2;
-            if values.len() % 2 == 0 {
+            if values.len().is_multiple_of(2) {
                 (values[middle - 1] + values[middle]) / 2.0
             } else {
                 values[middle]
@@ -404,7 +404,7 @@ pub fn focal_kernel<T: CellType>(
     if kernel.is_empty() {
         return Err(RasterError::EmptyInput);
     }
-    if kernel.width() % 2 == 0 || kernel.height() % 2 == 0 {
+    if kernel.width().is_multiple_of(2) || kernel.height().is_multiple_of(2) {
         return Err(RasterError::EvenKernel { width: kernel.width(), height: kernel.height() });
     }
 

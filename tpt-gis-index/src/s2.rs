@@ -68,7 +68,7 @@ impl S2CellId {
             return false;
         }
         let marker = self.0.trailing_zeros();
-        marker % 2 == 0 && marker <= 2 * MAX_LEVEL as u32
+        marker.is_multiple_of(2) && marker <= 2 * MAX_LEVEL as u32
     }
 
     /// The cell's level, 0 (largest) .. [`MAX_LEVEL`] (smallest).
