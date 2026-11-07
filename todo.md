@@ -543,7 +543,7 @@ the same logic, not real GDAL/QGIS/libtiff output; add third-party fixtures.
       - Done: PixelIsPoint georeferencing (the origin moves half a pixel); ZSTD decoding
         (`ruzstd`, decode only). Tests cover raw-block frames; real compressed streams are
         exercised by the decoder's own tests, not by ours.
-- [ ] Index: R-tree remove + k-NN; polygon-polygon and nearest spatial joins;
+- [x] Index: R-tree remove + k-NN; polygon-polygon and nearest spatial joins;
       H3/S2 polygon covering
       - Done: `RTree::remove`, `RTree::nearest` / `nearest_iter`,
         `polygon_intersection_join`, `nearest_polygon_join`.
