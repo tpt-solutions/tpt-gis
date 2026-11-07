@@ -11,8 +11,11 @@ pub struct Ellipsoid {
 
 impl Ellipsoid {
     /// Constructs an ellipsoid from its semi-major axis and inverse flattening (`1/f`).
+    ///
+    /// Not `const`: floating-point arithmetic in `const fn` needs Rust 1.82, and this
+    /// crate supports 1.81. The built-in ellipsoids use struct literals in `const` items.
     #[must_use]
-    pub const fn from_inverse_flattening(semi_major_axis: f64, inverse_flattening: f64) -> Self {
+    pub fn from_inverse_flattening(semi_major_axis: f64, inverse_flattening: f64) -> Self {
         Self { semi_major_axis, flattening: 1.0 / inverse_flattening }
     }
 
@@ -36,11 +39,13 @@ impl Ellipsoid {
     }
 
     /// WGS84 ellipsoid — the default reference for GPS and most modern web mapping.
-    pub const WGS84: Self = Self::from_inverse_flattening(6_378_137.0, 298.257_223_563);
+    pub const WGS84: Self =
+        Self { semi_major_axis: 6_378_137.0, flattening: 1.0 / 298.257_223_563 };
 
     /// GRS80 ellipsoid — used by most national geodetic datums (e.g. NAD83, GDA94/GDA2020).
     /// Numerically near-identical to WGS84 at the sub-millimeter level.
-    pub const GRS80: Self = Self::from_inverse_flattening(6_378_137.0, 298.257_222_101);
+    pub const GRS80: Self =
+        Self { semi_major_axis: 6_378_137.0, flattening: 1.0 / 298.257_222_101 };
 }
 
 #[cfg(test)]

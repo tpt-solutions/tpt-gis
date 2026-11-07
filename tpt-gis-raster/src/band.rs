@@ -115,7 +115,7 @@ impl GeoTransform {
     /// The six-coefficient GDAL form of this transform, with `pixel_height`
     /// negated back to GDAL's north-up convention.
     #[must_use]
-    pub const fn to_gdal(self) -> [f64; 6] {
+    pub fn to_gdal(self) -> [f64; 6] {
         [self.origin_x, self.pixel_width, 0.0, self.origin_y, 0.0, -self.pixel_height]
     }
 
