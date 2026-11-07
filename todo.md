@@ -518,6 +518,8 @@ the same logic, not real GDAL/QGIS/libtiff output; add third-party fixtures.
 
 ### 4.8 CI & release automation
 - [ ] `.github/dependabot.yml`; `concurrency` group; `Swatinem/rust-cache`; SHA-pin actions
+      - Done: dependabot, `concurrency` group, SHA-pinned actions (dependabot keeps them current).
+      - Open: `Swatinem/rust-cache`, MSRV job, `cargo doc -D warnings`, feature powerset.
 - [ ] Jobs: MSRV 1.81, `cargo-hack` feature powerset, `cargo doc -D warnings`,
       doctests, `http` feature, `cargo-semver-checks`, coverage (llvm-cov → Codecov),
       scheduled `cargo audit` / `cargo deny` advisories, scheduled fuzz runs
