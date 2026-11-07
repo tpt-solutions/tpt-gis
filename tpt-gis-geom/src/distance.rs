@@ -57,6 +57,7 @@ pub fn point_to_line_string(point: Point, line: &LineString) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::float_ext::Fabs as _;
 
     #[test]
     fn closest_point_on_segment_is_perpendicular_foot() {
@@ -81,21 +82,21 @@ mod tests {
     #[test]
     fn point_to_point_pythagorean() {
         let d = point_to_point(Point::new(0.0, 0.0), Point::new(3.0, 4.0));
-        assert!((d - 5.0).abs() < 1e-9);
+        assert!((d - 5.0).fabs() < 1e-9);
     }
 
     #[test]
     fn point_to_segment_perpendicular_distance() {
         let d =
             point_to_segment(Point::new(0.0, 5.0), Point::new(-10.0, 0.0), Point::new(10.0, 0.0));
-        assert!((d - 5.0).abs() < 1e-9);
+        assert!((d - 5.0).fabs() < 1e-9);
     }
 
     #[test]
     fn point_to_segment_clamps_past_endpoint() {
         let d =
             point_to_segment(Point::new(20.0, 0.0), Point::new(0.0, 0.0), Point::new(10.0, 0.0));
-        assert!((d - 10.0).abs() < 1e-9);
+        assert!((d - 10.0).fabs() < 1e-9);
     }
 
     #[test]
@@ -103,6 +104,6 @@ mod tests {
         let pts = [Point::new(0.0, 0.0), Point::new(10.0, 0.0), Point::new(10.0, 10.0)];
         let line = LineString::new(&pts);
         let d = point_to_line_string(Point::new(15.0, 5.0), &line);
-        assert!((d - 5.0).abs() < 1e-9);
+        assert!((d - 5.0).fabs() < 1e-9);
     }
 }

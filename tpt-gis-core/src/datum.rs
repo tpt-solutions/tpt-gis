@@ -4,6 +4,7 @@
 
 use libm::{atan2, cos, sin, sqrt};
 
+use crate::float_ext::Fabs as _;
 use crate::{Ellipsoid, GeoPoint};
 
 /// A geocentric (Earth-Centered, Earth-Fixed / ECEF) Cartesian coordinate, in meters.
@@ -72,7 +73,7 @@ pub fn geocentric_to_geodetic(ellipsoid: &Ellipsoid, geocentric: Geocentric) -> 
             break;
         }
         let phi_new = atan2(geocentric.z, p * (1.0 - e2 * n / denom));
-        if (phi_new - phi).abs() < 1e-13 {
+        if (phi_new - phi).fabs() < 1e-13 {
             phi = phi_new;
             break;
         }
@@ -159,9 +160,9 @@ mod tests {
         let geocentric = geodetic_to_geocentric(&Ellipsoid::WGS84, original, height);
         let (recovered, recovered_height) = geocentric_to_geodetic(&Ellipsoid::WGS84, geocentric);
 
-        assert!((recovered.lat_deg - original.lat_deg).abs() < 1e-9);
-        assert!((recovered.lon_deg - original.lon_deg).abs() < 1e-9);
-        assert!((recovered_height - height).abs() < 1e-6);
+        assert!((recovered.lat_deg - original.lat_deg).fabs() < 1e-9);
+        assert!((recovered.lon_deg - original.lon_deg).fabs() < 1e-9);
+        assert!((recovered_height - height).fabs() < 1e-6);
     }
 
     /// Near and at the poles, `p / cos(phi)` is ill-conditioned, so the height must
@@ -180,17 +181,17 @@ mod tests {
             let (recovered, recovered_height) = geocentric_to_geodetic(&ell, geocentric);
             assert!(recovered_height.is_finite(), "lat {lat}: height {recovered_height}");
             assert!(
-                (recovered.lat_deg - lat).abs() < 1e-7,
+                (recovered.lat_deg - lat).fabs() < 1e-7,
                 "lat {lat} recovered as {}",
                 recovered.lat_deg
             );
-            assert!((recovered_height - height).abs() < 1e-3, "lat {lat}: {recovered_height}");
+            assert!((recovered_height - height).fabs() < 1e-3, "lat {lat}: {recovered_height}");
         }
         // The exact north pole at height h sits at z = b + h, p = 0.
         let pole = Geocentric::new(0.0, 0.0, b + 100.0);
         let (north, h) = geocentric_to_geodetic(&ell, pole);
-        assert!((north.lat_deg - 90.0).abs() < 1e-9, "north lat {} h {h}", north.lat_deg);
-        assert!((h - 100.0).abs() < 1e-6, "height {h}");
+        assert!((north.lat_deg - 90.0).fabs() < 1e-9, "north lat {} h {h}", north.lat_deg);
+        assert!((h - 100.0).fabs() < 1e-6, "height {h}");
     }
 
     #[test]

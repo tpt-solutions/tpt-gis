@@ -7,6 +7,7 @@
 //! with the exterior) is reported as invalid only when it is a crossing; this is
 //! documented on the method.
 
+use crate::float_ext::Fabs as _;
 use crate::measure::ring_signed_area;
 use crate::point::Point;
 use crate::polygon::Polygon;
@@ -19,7 +20,7 @@ fn ring_is_simple(ring: &[Point]) -> bool {
     if ring.len() < 4 || ring.first() != ring.last() {
         return false;
     }
-    if ring_signed_area(ring).abs() <= EPSILON {
+    if ring_signed_area(ring).fabs() <= EPSILON {
         return false;
     }
     // Edges e_i = (ring[i], ring[i+1]) for i in 0..m, where m = len - 1 (the last point

@@ -4,6 +4,7 @@
 //! rounding for simple (non-self-intersecting) rings. Area is always non-negative
 //! regardless of ring orientation; holes are subtracted.
 
+use crate::float_ext::Fabs as _;
 use crate::point::Point;
 use crate::polygon::Polygon;
 use crate::predicates::ring_edges;
@@ -39,7 +40,7 @@ fn ring_centroid(ring: &[Point]) -> Option<(Point, f64)> {
         cy += (a.y + b.y) * cross;
     }
     let factor = 1.0 / (6.0 * signed);
-    Some((Point::new(cx * factor, cy * factor), signed.abs()))
+    Some((Point::new(cx * factor, cy * factor), signed.fabs()))
 }
 
 impl Polygon<'_> {
@@ -47,8 +48,8 @@ impl Polygon<'_> {
     /// hole. Always non-negative.
     #[must_use]
     pub fn area(&self) -> f64 {
-        let exterior = ring_signed_area(self.exterior).abs();
-        let holes: f64 = self.interiors.iter().map(|h| ring_signed_area(h).abs()).sum();
+        let exterior = ring_signed_area(self.exterior).fabs();
+        let holes: f64 = self.interiors.iter().map(|h| ring_signed_area(h).fabs()).sum();
         exterior - holes
     }
 
@@ -89,9 +90,9 @@ mod tests {
     #[test]
     fn square_area_and_centroid() {
         let poly = Polygon::from_exterior(&SQUARE);
-        assert!((poly.area() - 100.0).abs() < 1e-9);
+        assert!((poly.area() - 100.0).fabs() < 1e-9);
         let c = poly.centroid().unwrap();
-        assert!((c.x - 5.0).abs() < 1e-9 && (c.y - 5.0).abs() < 1e-9);
+        assert!((c.x - 5.0).fabs() < 1e-9 && (c.y - 5.0).fabs() < 1e-9);
     }
 
     #[test]
@@ -103,7 +104,7 @@ mod tests {
             Point::new(10.0, 0.0),
             Point::new(0.0, 0.0),
         ];
-        assert!((Polygon::from_exterior(&cw).area() - 100.0).abs() < 1e-9);
+        assert!((Polygon::from_exterior(&cw).area() - 100.0).fabs() < 1e-9);
         assert!(ring_signed_area(&cw) < 0.0);
     }
 
@@ -118,9 +119,9 @@ mod tests {
         ];
         let holes: [&[Point]; 1] = [&hole];
         let poly = Polygon::new(&SQUARE, &holes);
-        assert!((poly.area() - 96.0).abs() < 1e-9);
+        assert!((poly.area() - 96.0).fabs() < 1e-9);
         let c = poly.centroid().unwrap();
-        assert!((c.x - 5.0).abs() < 1e-9 && (c.y - 5.0).abs() < 1e-9);
+        assert!((c.x - 5.0).fabs() < 1e-9 && (c.y - 5.0).fabs() < 1e-9);
     }
 
     #[test]

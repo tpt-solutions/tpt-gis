@@ -29,6 +29,7 @@ use core::cmp::Ordering;
 
 use libm::atan2;
 
+use crate::float_ext::Fabs as _;
 use crate::point::Point;
 use crate::polygon::Polygon;
 use crate::predicates::point_in_ring;
@@ -71,7 +72,7 @@ impl OwnedPolygon {
     pub fn area(&self) -> f64 {
         let mut total = 0.0;
         for (i, ring) in self.rings.iter().enumerate() {
-            let a = ring_area(ring).abs();
+            let a = ring_area(ring).fabs();
             if i == 0 {
                 total += a;
             } else {
@@ -174,11 +175,11 @@ fn ring_area(ring: &[Point]) -> f64 {
 fn coordinate_scale(a: &Polygon, b: &Polygon) -> f64 {
     let mut m: f64 = 1.0;
     for p in a.exterior.iter().chain(b.exterior.iter()) {
-        m = m.max(p.x.abs()).max(p.y.abs());
+        m = m.max(p.x.fabs()).max(p.y.fabs());
     }
     for ring in a.interiors.iter().chain(b.interiors.iter()) {
         for p in ring.iter() {
-            m = m.max(p.x.abs()).max(p.y.abs());
+            m = m.max(p.x.fabs()).max(p.y.fabs());
         }
     }
     m
@@ -215,7 +216,7 @@ fn meeting_points(s: Seg, t: Seg, eps: f64, out: &mut Vec<Point>) {
     let denom = cross(d1, d2);
     let endpoints = [s.a, s.b, t.a, t.b];
 
-    if denom.abs() > 0.0 {
+    if denom.fabs() > 0.0 {
         let w = sub(t.a, s.a);
         let u = cross(w, d2) / denom;
         let v = cross(w, d1) / denom;
@@ -234,7 +235,7 @@ fn meeting_points(s: Seg, t: Seg, eps: f64, out: &mut Vec<Point>) {
 
     // Parallel: collinear only if t.a lies on the line through s.
     let len = dist(s.a, s.b).max(f64::MIN_POSITIVE);
-    if orient(s.a, s.b, t.a).abs() / len > eps {
+    if orient(s.a, s.b, t.a).fabs() / len > eps {
         return;
     }
     for e in [t.a, t.b] {
@@ -251,7 +252,7 @@ fn meeting_points(s: Seg, t: Seg, eps: f64, out: &mut Vec<Point>) {
 
 fn on_segment(p: Point, s: Seg, eps: f64) -> bool {
     let len = dist(s.a, s.b).max(f64::MIN_POSITIVE);
-    orient(s.a, s.b, p).abs() / len <= eps
+    orient(s.a, s.b, p).fabs() / len <= eps
         && p.x >= s.a.x.min(s.b.x) - eps
         && p.x <= s.a.x.max(s.b.x) + eps
         && p.y >= s.a.y.min(s.b.y) - eps
@@ -533,7 +534,7 @@ fn assemble(mut edges: Vec<ResultEdge>, eps: f64) -> Vec<OwnedPolygon> {
         let mut target: Option<(usize, f64)> = None;
         for (idx, poly) in polygons.iter().enumerate() {
             if point_in_ring(probe, &poly.rings[0]) {
-                let area = ring_area(&poly.rings[0]).abs();
+                let area = ring_area(&poly.rings[0]).fabs();
                 if target.map_or(true, |(_, a)| area < a) {
                     target = Some((idx, area));
                 }
@@ -601,6 +602,7 @@ fn remove_collinear(ring: Vec<Point>) -> Vec<Point> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::float_ext::Fabs as _;
     use alloc::vec;
 
     fn rect(x0: f64, y0: f64, x1: f64, y1: f64) -> Vec<Point> {
@@ -623,10 +625,10 @@ mod tests {
         let b_ring = rect(5.0, 5.0, 15.0, 15.0);
         let a = Polygon::from_exterior(&a_ring);
         let b = Polygon::from_exterior(&b_ring);
-        assert!((total_area(&union(&a, &b)) - 175.0).abs() < 1e-9);
-        assert!((total_area(&intersection(&a, &b)) - 25.0).abs() < 1e-9);
-        assert!((total_area(&difference(&a, &b)) - 75.0).abs() < 1e-9);
-        assert!((total_area(&symmetric_difference(&a, &b)) - 150.0).abs() < 1e-9);
+        assert!((total_area(&union(&a, &b)) - 175.0).fabs() < 1e-9);
+        assert!((total_area(&intersection(&a, &b)) - 25.0).fabs() < 1e-9);
+        assert!((total_area(&difference(&a, &b)) - 75.0).fabs() < 1e-9);
+        assert!((total_area(&symmetric_difference(&a, &b)) - 150.0).fabs() < 1e-9);
     }
 
     #[test]
@@ -637,17 +639,17 @@ mod tests {
         let b = Polygon::from_exterior(&b_ring);
         let u = union(&a, &b);
         assert_eq!(u.len(), 2);
-        assert!((total_area(&u) - 2.0).abs() < 1e-9);
+        assert!((total_area(&u) - 2.0).fabs() < 1e-9);
         assert!(intersection(&a, &b).is_empty());
-        assert!((total_area(&difference(&a, &b)) - 1.0).abs() < 1e-9);
+        assert!((total_area(&difference(&a, &b)) - 1.0).fabs() < 1e-9);
     }
 
     #[test]
     fn identical_squares() {
         let ring = rect(0.0, 0.0, 10.0, 10.0);
         let a = Polygon::from_exterior(&ring);
-        assert!((total_area(&union(&a, &a)) - 100.0).abs() < 1e-9);
-        assert!((total_area(&intersection(&a, &a)) - 100.0).abs() < 1e-9);
+        assert!((total_area(&union(&a, &a)) - 100.0).fabs() < 1e-9);
+        assert!((total_area(&intersection(&a, &a)) - 100.0).fabs() < 1e-9);
         assert!(difference(&a, &a).is_empty());
         assert!(symmetric_difference(&a, &a).is_empty());
     }
@@ -662,7 +664,7 @@ mod tests {
         let b = Polygon::from_exterior(&b_ring);
         let u = union(&a, &b);
         assert_eq!(u.len(), 1, "{u:?}");
-        assert!((total_area(&u) - 200.0).abs() < 1e-9);
+        assert!((total_area(&u) - 200.0).fabs() < 1e-9);
         assert!(intersection(&a, &b).is_empty());
     }
 
@@ -675,7 +677,7 @@ mod tests {
         let d = difference(&a, &b);
         assert_eq!(d.len(), 1);
         assert_eq!(d[0].rings.len(), 2, "expected one hole");
-        assert!((total_area(&d) - 96.0).abs() < 1e-9);
+        assert!((total_area(&d) - 96.0).fabs() < 1e-9);
     }
 
     #[test]
@@ -687,10 +689,10 @@ mod tests {
         let a = Polygon::new(&outer_ring, &holes);
         let b = Polygon::from_exterior(&cover_ring);
         let u = union(&a, &b);
-        assert!((total_area(&u) - 100.0).abs() < 1e-9);
+        assert!((total_area(&u) - 100.0).fabs() < 1e-9);
         assert!(u.iter().all(|p| p.rings.len() == 1));
         // Intersection is the cover minus the hole part it overlaps: 16 - 4 = 12.
-        assert!((total_area(&intersection(&a, &b)) - 12.0).abs() < 1e-9);
+        assert!((total_area(&intersection(&a, &b)) - 12.0).fabs() < 1e-9);
     }
 
     #[test]
@@ -841,7 +843,7 @@ mod oracle_tests {
         for trial in 0..3000 {
             let ta = triangle(&mut rng);
             let tb = triangle(&mut rng);
-            if area_of(&ta).abs() < 1e-12 || area_of(&tb).abs() < 1e-12 {
+            if area_of(&ta).fabs() < 1e-12 || area_of(&tb).fabs() < 1e-12 {
                 continue;
             }
             check(
@@ -930,7 +932,7 @@ mod oracle_tests {
         let area: f64 = u.iter().map(OwnedPolygon::area).sum();
         // The rectangle has area 20. The octagon (area 2√2) is split by the rectangle's left
         // edge, and the half at x < 0 adds √2 to the union.
-        assert!((area - (20.0 + 2.0_f64.sqrt())).abs() < 1e-9, "area {area}");
+        assert!((area - (20.0 + libm::sqrt(2.0))).fabs() < 1e-9, "area {area}");
     }
 
     fn rect_ring(x0: f64, y0: f64, x1: f64, y1: f64) -> Vec<Point> {

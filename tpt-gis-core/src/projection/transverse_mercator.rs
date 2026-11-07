@@ -169,6 +169,7 @@ impl TransverseMercator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::float_ext::Fabs as _;
     use crate::projection::utm;
     use crate::projection::utm::Zone;
 
@@ -188,7 +189,7 @@ mod tests {
         let p = GeoPoint::new(40.7128, -74.0060);
         let a = tm.forward(p);
         let b = utm::forward(&Ellipsoid::WGS84, p, zone);
-        assert!((a.x - b.x).abs() < 1e-6 && (a.y - b.y).abs() < 1e-6, "{a:?} vs {b:?}");
+        assert!((a.x - b.x).fabs() < 1e-6 && (a.y - b.y).fabs() < 1e-6, "{a:?} vs {b:?}");
     }
 
     /// The origin maps exactly to the false origin, even when the origin latitude is not
@@ -204,8 +205,8 @@ mod tests {
             -100_000.0,
         );
         let p = tm.forward(GeoPoint::new(49.0, -2.0));
-        assert!((p.x - 400_000.0).abs() < 1e-6, "x {}", p.x);
-        assert!((p.y + 100_000.0).abs() < 1e-6, "y {}", p.y);
+        assert!((p.x - 400_000.0).fabs() < 1e-6, "x {}", p.x);
+        assert!((p.y + 100_000.0).fabs() < 1e-6, "y {}", p.y);
     }
 
     #[test]
@@ -220,8 +221,8 @@ mod tests {
         );
         for &(lat, lon) in &[(51.5074, -0.1278), (50.7, -3.5), (53.8, -1.5)] {
             let back = tm.inverse(tm.forward(GeoPoint::new(lat, lon)));
-            assert!((back.lat_deg - lat).abs() < 1e-7, "lat {}", back.lat_deg);
-            assert!((back.lon_deg - lon).abs() < 1e-7, "lon {}", back.lon_deg);
+            assert!((back.lat_deg - lat).fabs() < 1e-7, "lat {}", back.lat_deg);
+            assert!((back.lon_deg - lon).fabs() < 1e-7, "lon {}", back.lon_deg);
         }
     }
 
@@ -239,6 +240,6 @@ mod tests {
         let meridional_radius =
             Ellipsoid::WGS84.semi_major_axis * (1.0 - e2) / libm::pow(1.0 - e2 * s * s, 1.5);
         let ground = meridional_radius * 0.001_f64.to_radians();
-        assert!((grid / ground - k0).abs() < 1e-6, "scale {}", grid / ground);
+        assert!((grid / ground - k0).fabs() < 1e-6, "scale {}", grid / ground);
     }
 }

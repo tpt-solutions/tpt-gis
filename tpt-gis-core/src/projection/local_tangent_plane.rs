@@ -14,6 +14,7 @@
 
 use libm::{cos, pow, sin, sqrt};
 
+use crate::float_ext::Fabs as _;
 use crate::{GeoPoint, PlanarPoint};
 
 /// WGS84 semi-major axis, in meters.
@@ -57,7 +58,7 @@ impl LocalTangentPlane {
         let n = WGS84_A / w;
         let m = WGS84_A * (1.0 - WGS84_E2) / pow(w, 3.0);
         let cos_phi = cos(phi);
-        let east_scale = if cos_phi.abs() < POLE_COS_EPSILON { 0.0 } else { n * cos_phi };
+        let east_scale = if cos_phi.fabs() < POLE_COS_EPSILON { 0.0 } else { n * cos_phi };
         Self { origin, east_scale, north_scale: m }
     }
 
@@ -80,7 +81,7 @@ impl LocalTangentPlane {
     /// The returned longitude is normalised to `[-180, 180)`.
     #[must_use]
     pub fn to_geographic(&self, point: PlanarPoint) -> GeoPoint {
-        let lon_deg = if self.east_scale.abs() < POLE_COS_EPSILON {
+        let lon_deg = if self.east_scale.fabs() < POLE_COS_EPSILON {
             self.origin.lon_deg
         } else {
             wrap_delta_lon_deg(self.origin.lon_deg + (point.x / self.east_scale).to_degrees())
@@ -99,8 +100,8 @@ mod tests {
         let origin = GeoPoint::new(37.775, -122.415);
         let plane = LocalTangentPlane::new(origin);
         let local = plane.to_local(origin);
-        assert!(local.x.abs() < 1e-9);
-        assert!(local.y.abs() < 1e-9);
+        assert!(local.x.fabs() < 1e-9);
+        assert!(local.y.fabs() < 1e-9);
     }
 
     #[test]
@@ -110,8 +111,8 @@ mod tests {
         let origin = GeoPoint::new(0.0, 0.0);
         let plane = LocalTangentPlane::new(origin);
         let local = plane.to_local(GeoPoint::new(1.0, 0.0));
-        assert!((local.y - 110_574.39).abs() < 0.5, "north = {}", local.y);
-        assert!(local.x.abs() < 1e-6);
+        assert!((local.y - 110_574.39).fabs() < 0.5, "north = {}", local.y);
+        assert!(local.x.fabs() < 1e-6);
     }
 
     /// A plane centred at 179.9°E must place -179.9° (the same meridian, 0.2° further
@@ -121,9 +122,9 @@ mod tests {
         let plane = LocalTangentPlane::new(GeoPoint::new(0.0, 179.9));
         let east_of_origin = plane.to_local(GeoPoint::new(0.0, -179.9));
         // 0.2° of longitude at the equator is about 22.26 km, eastward.
-        assert!((east_of_origin.x - 22_263.9).abs() < 1.0, "{east_of_origin:?}");
+        assert!((east_of_origin.x - 22_263.9).fabs() < 1.0, "{east_of_origin:?}");
         let back = plane.to_geographic(east_of_origin);
-        assert!((back.lon_deg - (-179.9)).abs() < 1e-9, "lon {}", back.lon_deg);
+        assert!((back.lon_deg - (-179.9)).fabs() < 1e-9, "lon {}", back.lon_deg);
     }
 
     /// On a pole the east axis is degenerate; the inverse must stay finite.
@@ -147,7 +148,7 @@ mod tests {
 
         // The ellipsoidal prime-vertical radius adds a ~0.13% correction at 60°
         // (ratio ≈ 0.50126), so allow for it rather than the spherical 0.5 exactly.
-        assert!((east_at_60 / east_at_equator - 0.5).abs() < 2e-3);
+        assert!((east_at_60 / east_at_equator - 0.5).fabs() < 2e-3);
     }
 
     #[test]
@@ -159,7 +160,7 @@ mod tests {
         let local = plane.to_local(original);
         let recovered = plane.to_geographic(local);
 
-        assert!((recovered.lat_deg - original.lat_deg).abs() < 1e-9);
-        assert!((recovered.lon_deg - original.lon_deg).abs() < 1e-9);
+        assert!((recovered.lat_deg - original.lat_deg).fabs() < 1e-9);
+        assert!((recovered.lon_deg - original.lon_deg).fabs() < 1e-9);
     }
 }

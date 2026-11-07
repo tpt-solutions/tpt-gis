@@ -51,10 +51,11 @@ impl Ellipsoid {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::float_ext::Fabs as _;
 
     #[test]
     fn wgs84_semi_minor_axis() {
         let b = Ellipsoid::WGS84.semi_minor_axis();
-        assert!((b - 6_356_752.314_245).abs() < 1e-3);
+        assert!((b - 6_356_752.314_245).fabs() < 1e-3);
     }
 }

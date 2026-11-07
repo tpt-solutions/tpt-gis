@@ -7,6 +7,7 @@
 
 use libm::{atan, atan2, cos, log, pow, sin, sqrt, tan};
 
+use crate::float_ext::Fabs as _;
 use crate::{Ellipsoid, GeoPoint, PlanarPoint};
 
 /// Convergence tolerance for the inverse latitude iteration, in radians.
@@ -70,7 +71,7 @@ impl LambertConformal {
         let m2 = m_of(phi2, e2);
         // For one standard parallel, n = sin φ1; the two-parallel formula is singular
         // there (0/0), so use the limit.
-        let n = if (phi1 - phi2).abs() < 1e-12 {
+        let n = if (phi1 - phi2).fabs() < 1e-12 {
             sin(phi1)
         } else {
             (log(m1) - log(m2)) / (log(t1) - log(t2))
@@ -112,8 +113,8 @@ impl LambertConformal {
     pub fn inverse(&self, point: PlanarPoint) -> GeoPoint {
         let x = point.x - self.false_easting;
         let y = self.rho0 - (point.y - self.false_northing);
-        let rho = sqrt(x * x + y * y) * self.n.signum();
-        let theta = atan2(x * self.n.signum(), y * self.n.signum());
+        let rho = sqrt(x * x + y * y) * libm::copysign(1.0, self.n);
+        let theta = atan2(x * libm::copysign(1.0, self.n), y * libm::copysign(1.0, self.n));
         let t = pow(rho / self.a_f, 1.0 / self.n);
 
         // Snyder eq. 7-9: iterate the latitude from the conformal colatitude.
@@ -122,7 +123,7 @@ impl LambertConformal {
             let s = sin(phi);
             let next = core::f64::consts::FRAC_PI_2
                 - 2.0 * atan(t * pow((1.0 - self.e * s) / (1.0 + self.e * s), self.e / 2.0));
-            let done = (next - phi).abs() < TOLERANCE;
+            let done = (next - phi).fabs() < TOLERANCE;
             phi = next;
             if done {
                 break;
@@ -152,8 +153,8 @@ mod tests {
         let lcc =
             LambertConformal::new(&Ellipsoid::GRS80, 46.5, 3.0, 44.0, 49.0, 700_000.0, 6_600_000.0);
         let p = lcc.forward(GeoPoint::new(46.5, 3.0));
-        assert!((p.x - 700_000.0).abs() < 1e-6, "x = {}", p.x);
-        assert!((p.y - 6_600_000.0).abs() < 1e-6, "y = {}", p.y);
+        assert!((p.x - 700_000.0).fabs() < 1e-6, "x = {}", p.x);
+        assert!((p.y - 6_600_000.0).fabs() < 1e-6, "y = {}", p.y);
     }
 
     /// Scale is exactly 1 on both standard parallels: a defining property of the
@@ -161,8 +162,8 @@ mod tests {
     #[test]
     fn scale_is_unity_on_standard_parallels() {
         let lcc = LambertConformal::lambert93();
-        assert!((lcc.parallel_scale(44.0) - 1.0).abs() < 1e-9);
-        assert!((lcc.parallel_scale(49.0) - 1.0).abs() < 1e-9);
+        assert!((lcc.parallel_scale(44.0) - 1.0).fabs() < 1e-9);
+        assert!((lcc.parallel_scale(49.0) - 1.0).fabs() < 1e-9);
         // Between the parallels the scale dips below 1; outside it rises above.
         assert!(lcc.parallel_scale(46.5) < 1.0);
         assert!(lcc.parallel_scale(60.0) > 1.0);
@@ -174,8 +175,8 @@ mod tests {
         for &(lat, lon) in &[(48.8566, 2.3522), (43.2965, 5.3698), (51.0, -4.0)] {
             let original = GeoPoint::new(lat, lon);
             let back = lcc.inverse(lcc.forward(original));
-            assert!((back.lat_deg - lat).abs() < 1e-8, "lat {}", back.lat_deg);
-            assert!((back.lon_deg - lon).abs() < 1e-8, "lon {}", back.lon_deg);
+            assert!((back.lat_deg - lat).fabs() < 1e-8, "lat {}", back.lat_deg);
+            assert!((back.lon_deg - lon).fabs() < 1e-8, "lon {}", back.lon_deg);
         }
     }
 
@@ -185,8 +186,8 @@ mod tests {
     #[test]
     fn paris_matches_proj_for_lambert93() {
         let p = LambertConformal::lambert93().forward(GeoPoint::new(48.8566, 2.3522));
-        assert!((p.x - 652_469.022_709).abs() < 1.0, "{p:?}");
-        assert!((p.y - 6_862_035.259_420).abs() < 1.0, "{p:?}");
+        assert!((p.x - 652_469.022_709).fabs() < 1.0, "{p:?}");
+        assert!((p.y - 6_862_035.259_420).fabs() < 1.0, "{p:?}");
     }
 
     #[test]

@@ -141,6 +141,7 @@ pub fn inverse(ellipsoid: &Ellipsoid, point: PlanarPoint, zone: Zone) -> GeoPoin
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::float_ext::Fabs as _;
 
     #[test]
     fn zone_containing_greenwich() {
@@ -196,8 +197,8 @@ mod tests {
         let zone = Zone::new(1, true);
         let east = forward(&Ellipsoid::WGS84, GeoPoint::new(10.0, 179.0), zone);
         let west = forward(&Ellipsoid::WGS84, GeoPoint::new(10.0, -181.0), zone);
-        assert!((east.x - west.x).abs() < 1e-6, "{} vs {}", east.x, west.x);
-        assert!((east.y - west.y).abs() < 1e-6);
+        assert!((east.x - west.x).fabs() < 1e-6, "{} vs {}", east.x, west.x);
+        assert!((east.y - west.y).fabs() < 1e-6);
     }
 
     /// The forward/inverse pair use a truncated 6th-order series expansion (per USGS
@@ -213,12 +214,12 @@ mod tests {
         let recovered = inverse(&Ellipsoid::WGS84, projected, zone);
 
         assert!(
-            (recovered.lat_deg - original.lat_deg).abs() < 1e-7,
+            (recovered.lat_deg - original.lat_deg).fabs() < 1e-7,
             "lat diff = {}",
             recovered.lat_deg - original.lat_deg
         );
         assert!(
-            (recovered.lon_deg - original.lon_deg).abs() < 1e-7,
+            (recovered.lon_deg - original.lon_deg).fabs() < 1e-7,
             "lon diff = {}",
             recovered.lon_deg - original.lon_deg
         );
@@ -234,7 +235,7 @@ mod tests {
 
         let projected = forward(&Ellipsoid::WGS84, point, zone);
 
-        assert!((projected.x - FALSE_EASTING_M).abs() < 1e-6, "easting = {}", projected.x);
+        assert!((projected.x - FALSE_EASTING_M).fabs() < 1e-6, "easting = {}", projected.x);
     }
 
     #[test]
@@ -242,7 +243,7 @@ mod tests {
         let zone = Zone::containing(GeoPoint::new(40.7128, -74.0060)); // New York City, zone 18N
         let point = GeoPoint::new(40.7128, -74.0060);
         let projected = forward(&Ellipsoid::WGS84, point, zone);
-        assert!((projected.x - 583960.0).abs() < 10.0, "easting = {}", projected.x);
-        assert!((projected.y - 4507351.0).abs() < 10.0, "northing = {}", projected.y);
+        assert!((projected.x - 583960.0).fabs() < 10.0, "easting = {}", projected.x);
+        assert!((projected.y - 4507351.0).fabs() < 10.0, "northing = {}", projected.y);
     }
 }

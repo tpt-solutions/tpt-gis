@@ -11,6 +11,7 @@
 //! Area comparisons use a relative tolerance of `1e-9` of the combined area.
 
 use crate::clip;
+use crate::float_ext::Fabs as _;
 use crate::polygon::Polygon;
 use crate::predicates::{polygon_contains_polygon, polygons_intersect};
 
@@ -28,7 +29,7 @@ pub fn polygons_touch(a: &Polygon, b: &Polygon) -> bool {
     if !polygons_intersect(a, b) {
         return false;
     }
-    let scale = a.area().abs() + b.area().abs();
+    let scale = a.area().fabs() + b.area().fabs();
     intersection_area(a, b) <= AREA_TOLERANCE * scale
 }
 
@@ -39,7 +40,7 @@ pub fn polygons_overlap(a: &Polygon, b: &Polygon) -> bool {
     if polygon_contains_polygon(a, b) || polygon_contains_polygon(b, a) {
         return false;
     }
-    let scale = a.area().abs() + b.area().abs();
+    let scale = a.area().fabs() + b.area().fabs();
     intersection_area(a, b) > AREA_TOLERANCE * scale
 }
 

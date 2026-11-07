@@ -7,6 +7,7 @@
 
 use libm::{asin, atan2, cos, log, sin, sqrt};
 
+use crate::float_ext::Fabs as _;
 use crate::{Ellipsoid, GeoPoint, PlanarPoint};
 
 /// Convergence tolerance for the inverse latitude iteration, in radians.
@@ -117,7 +118,7 @@ impl Albers {
                 * (q / (1.0 - self.e2) - s / one_minus
                     + (1.0 / (2.0 * self.e)) * log((1.0 - self.e * s) / (1.0 + self.e * s)));
             let next = phi + correction;
-            let done = (next - phi).abs() < TOLERANCE;
+            let done = (next - phi).fabs() < TOLERANCE;
             phi = next;
             if done {
                 break;
@@ -158,21 +159,21 @@ mod tests {
         ];
         for ((lat, lon), x, y) in cases {
             let p = conus().forward(GeoPoint::new(lat, lon));
-            assert!((p.x - x).abs() < 1.0 && (p.y - y).abs() < 1.0, "{lat},{lon}: {p:?}");
+            assert!((p.x - x).fabs() < 1.0 && (p.y - y).fabs() < 1.0, "{lat},{lon}: {p:?}");
         }
     }
 
     #[test]
     fn origin_maps_to_false_origin() {
         let p = conus().forward(GeoPoint::new(23.0, -96.0));
-        assert!(p.x.abs() < 1e-6 && p.y.abs() < 1e-6, "{p:?}");
+        assert!(p.x.fabs() < 1e-6 && p.y.fabs() < 1e-6, "{p:?}");
     }
 
     #[test]
     fn scale_is_unity_on_standard_parallels() {
         let albers = conus();
-        assert!((albers.parallel_scale(29.5) - 1.0).abs() < 1e-9);
-        assert!((albers.parallel_scale(45.5) - 1.0).abs() < 1e-9);
+        assert!((albers.parallel_scale(29.5) - 1.0).fabs() < 1e-9);
+        assert!((albers.parallel_scale(45.5) - 1.0).fabs() < 1e-9);
     }
 
     #[test]
@@ -180,8 +181,8 @@ mod tests {
         let albers = conus();
         for &(lat, lon) in &[(39.0, -77.0), (47.6, -122.3), (25.8, -80.2)] {
             let back = albers.inverse(albers.forward(GeoPoint::new(lat, lon)));
-            assert!((back.lat_deg - lat).abs() < 1e-8, "lat {}", back.lat_deg);
-            assert!((back.lon_deg - lon).abs() < 1e-8, "lon {}", back.lon_deg);
+            assert!((back.lat_deg - lat).fabs() < 1e-8, "lat {}", back.lat_deg);
+            assert!((back.lon_deg - lon).fabs() < 1e-8, "lon {}", back.lon_deg);
         }
     }
 
@@ -203,7 +204,7 @@ mod tests {
             let (a, b) = (p[i], p[(i + 1) % 4]);
             planar += a.x * b.y - b.x * a.y;
         }
-        let planar = (planar / 2.0).abs();
+        let planar = (planar / 2.0).fabs();
         // True area of the cell: ∫∫ N·M ... ≈ (d in radians)² · N·M·cos φ (ellipsoidal).
         let e2 = Ellipsoid::GRS80.eccentricity_squared();
         let s = sin(lat.to_radians());
@@ -211,6 +212,6 @@ mod tests {
         let n_rad = Ellipsoid::GRS80.semi_major_axis / w;
         let m_rad = Ellipsoid::GRS80.semi_major_axis * (1.0 - e2) / (w * w * w);
         let true_area = d.to_radians() * n_rad * cos(lat.to_radians()) * d.to_radians() * m_rad;
-        assert!((planar / true_area - 1.0).abs() < 1e-3, "planar {planar} vs true {true_area}");
+        assert!((planar / true_area - 1.0).fabs() < 1e-3, "planar {planar} vs true {true_area}");
     }
 }

@@ -15,6 +15,7 @@ use alloc::vec::Vec;
 use libm::{cos, sin, sqrt};
 
 use crate::clip::{self, OwnedPolygon};
+use crate::float_ext::Fabs as _;
 use crate::point::Point;
 use crate::polygon::Polygon;
 
@@ -206,13 +207,14 @@ fn merge_all(pieces: Vec<Vec<Point>>) -> Vec<OwnedPolygon> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::float_ext::Fabs as _;
 
     fn total_area(parts: &[OwnedPolygon]) -> f64 {
         parts.iter().map(OwnedPolygon::area).sum()
     }
 
     fn rel_err(actual: f64, expected: f64) -> f64 {
-        ((actual - expected) / expected).abs()
+        ((actual - expected) / expected).fabs()
     }
 
     #[test]
@@ -273,7 +275,7 @@ mod tests {
         ];
         let poly = Polygon::from_exterior(&ring);
         let parts = buffer_polygon(&poly, 0.0, 8).unwrap();
-        assert!((total_area(&parts) - 16.0).abs() < 1e-9);
+        assert!((total_area(&parts) - 16.0).fabs() < 1e-9);
     }
 
     /// A 10×10 square with a 4×4 hole, buffered by 1: the outer buffer has area 140 + π,

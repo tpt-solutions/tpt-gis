@@ -6,6 +6,7 @@
 //! consistently rather than flipping on rounding noise.
 
 use crate::distance;
+use crate::float_ext::Fabs as _;
 use crate::line_string::LineString;
 use crate::point::Point;
 use crate::polygon::Polygon;
@@ -24,7 +25,7 @@ const RELATIVE_TOLERANCE: f64 = 1e-14;
 /// applies, so ordinary coordinates behave as before. Beyond that, rounding noise grows
 /// with magnitude and the absolute floor would fall below it.
 fn tolerance_for(points: &[Point]) -> f64 {
-    let magnitude = points.iter().fold(0.0_f64, |m, p| m.max(p.x.abs()).max(p.y.abs()));
+    let magnitude = points.iter().fold(0.0_f64, |m, p| m.max(p.x.fabs()).max(p.y.fabs()));
     EPSILON.max(RELATIVE_TOLERANCE * magnitude)
 }
 
@@ -74,8 +75,9 @@ fn orientation(p: Point, q: Point, r: Point) -> Orientation {
     // Tolerance is relative to the size of the two edge vectors, so that the test
     // behaves the same at micrometre scale and at projected-metre scale. An absolute
     // threshold would call every tiny triangle collinear.
-    let scale = ((q.x - p.x).abs() + (q.y - p.y).abs()) * ((r.x - q.x).abs() + (r.y - q.y).abs());
-    if val.abs() <= EPSILON * scale {
+    let scale =
+        ((q.x - p.x).fabs() + (q.y - p.y).fabs()) * ((r.x - q.x).fabs() + (r.y - q.y).fabs());
+    if val.fabs() <= EPSILON * scale {
         Orientation::Collinear
     } else if val > 0.0 {
         Orientation::Clockwise
@@ -270,7 +272,7 @@ fn proper_crossing_param(p: Point, q: Point, a: Point, b: Point) -> Option<f64> 
     let r = (q.x - p.x, q.y - p.y);
     let s = (b.x - a.x, b.y - a.y);
     let denom = r.0 * s.1 - r.1 * s.0;
-    if denom.abs() < f64::EPSILON {
+    if denom.fabs() < f64::EPSILON {
         return None;
     }
     let ap = (a.x - p.x, a.y - p.y);

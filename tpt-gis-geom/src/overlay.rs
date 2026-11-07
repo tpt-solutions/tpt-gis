@@ -61,6 +61,7 @@ pub fn polygon_within(inner: &Polygon, outer: &Polygon) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::float_ext::Fabs as _;
 
     #[test]
     fn crossing_segments_meet_at_centre() {
@@ -71,7 +72,7 @@ mod tests {
             Point::new(4.0, 0.0),
         )
         .unwrap();
-        assert!((p.x - 2.0).abs() < 1e-9 && (p.y - 2.0).abs() < 1e-9);
+        assert!((p.x - 2.0).fabs() < 1e-9 && (p.y - 2.0).fabs() < 1e-9);
     }
 
     #[test]
@@ -108,7 +109,7 @@ mod tests {
             Point::new(6.0, 0.0),
         )
         .unwrap();
-        assert!(p.y.abs() < 1e-9 && p.x >= 2.0 - 1e-9 && p.x <= 4.0 + 1e-9);
+        assert!(p.y.fabs() < 1e-9 && p.x >= 2.0 - 1e-9 && p.x <= 4.0 + 1e-9);
     }
 
     #[test]

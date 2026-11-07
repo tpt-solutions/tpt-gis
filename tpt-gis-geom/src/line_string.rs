@@ -43,12 +43,13 @@ impl<'a> LineString<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::float_ext::Fabs as _;
 
     #[test]
     fn length_sums_segments() {
         let pts = [Point::new(0.0, 0.0), Point::new(3.0, 4.0), Point::new(3.0, 0.0)];
         let line = LineString::new(&pts);
-        assert!((line.length() - 9.0).abs() < 1e-9); // 5.0 + 4.0
+        assert!((line.length() - 9.0).fabs() < 1e-9); // 5.0 + 4.0
     }
 
     #[test]

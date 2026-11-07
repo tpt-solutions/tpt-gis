@@ -45,21 +45,22 @@ pub fn inverse(point: PlanarPoint) -> GeoPoint {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::float_ext::Fabs as _;
 
     /// Longitudes beyond the antimeridian wrap to the equivalent point.
     #[test]
     fn longitude_wraps_at_the_antimeridian() {
         let east = forward(GeoPoint::new(10.0, 190.0));
         let west = forward(GeoPoint::new(10.0, -170.0));
-        assert!((east.x - west.x).abs() < 1e-6, "{} vs {}", east.x, west.x);
-        assert!((east.y - west.y).abs() < 1e-9);
+        assert!((east.x - west.x).fabs() < 1e-6, "{} vs {}", east.x, west.x);
+        assert!((east.y - west.y).fabs() < 1e-9);
     }
 
     #[test]
     fn origin_maps_to_origin() {
         let p = forward(GeoPoint::new(0.0, 0.0));
-        assert!(p.x.abs() < 1e-9);
-        assert!(p.y.abs() < 1e-9);
+        assert!(p.x.fabs() < 1e-9);
+        assert!(p.y.fabs() < 1e-9);
     }
 
     #[test]
@@ -68,15 +69,15 @@ mod tests {
         let projected = forward(original);
         let recovered = inverse(projected);
 
-        assert!((recovered.lat_deg - original.lat_deg).abs() < 1e-9);
-        assert!((recovered.lon_deg - original.lon_deg).abs() < 1e-9);
+        assert!((recovered.lat_deg - original.lat_deg).fabs() < 1e-9);
+        assert!((recovered.lon_deg - original.lon_deg).fabs() < 1e-9);
     }
 
     #[test]
     fn forward_matches_known_reference() {
         let point = GeoPoint::new(40.7484, -73.9857);
         let projected = forward(point);
-        assert!((projected.x - (-8236050.45)).abs() < 1.0, "x = {}", projected.x);
-        assert!((projected.y - 4975301.25).abs() < 1.0, "y = {}", projected.y);
+        assert!((projected.x - (-8236050.45)).fabs() < 1.0, "x = {}", projected.x);
+        assert!((projected.y - 4975301.25).fabs() < 1.0, "y = {}", projected.y);
     }
 }

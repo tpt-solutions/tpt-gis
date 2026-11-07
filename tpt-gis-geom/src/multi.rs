@@ -131,6 +131,7 @@ impl GeometryRef<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::float_ext::Fabs as _;
 
     const SQ_A: [Point; 5] = [
         Point::new(0.0, 0.0),
@@ -151,7 +152,7 @@ mod tests {
     fn multipolygon_area_and_containment() {
         let polys = [Polygon::from_exterior(&SQ_A), Polygon::from_exterior(&SQ_B)];
         let multi = MultiPolygon { polygons: &polys };
-        assert!((multi.area() - (4.0 + 9.0)).abs() < 1e-9);
+        assert!((multi.area() - (4.0 + 9.0)).fabs() < 1e-9);
         assert!(multi.contains_point(Point::new(1.0, 1.0)));
         assert!(multi.contains_point(Point::new(11.0, 11.0)));
         assert!(!multi.contains_point(Point::new(5.0, 5.0)));
@@ -177,7 +178,7 @@ mod tests {
         let a = [Point::new(0.0, 0.0), Point::new(3.0, 4.0)]; // 5
         let b = [Point::new(0.0, 0.0), Point::new(0.0, 2.0)]; // 2
         let lines = [LineString::new(&a), LineString::new(&b)];
-        assert!((MultiLineString { lines: &lines }.length() - 7.0).abs() < 1e-9);
+        assert!((MultiLineString { lines: &lines }.length() - 7.0).fabs() < 1e-9);
     }
 
     #[test]
