@@ -580,9 +580,10 @@ the same logic, not real GDAL/QGIS/libtiff output; add third-party fixtures.
 - [ ] Python: `.pyi` stubs + `py.typed` (done: the native module is
       `tpt_gis_py._core`, stubs are checked by `mypy.stubtest` in CI), `__geo_interface__`,
       bounds/area/length, `__eq__`/`__hash__`/pickle, and the exception hierarchy (done).
-      Done: `coordinates()` returns vertices as a NumPy array (NumPy imported lazily).
-      Open: `allow_threads`, zipped shapefile geometry+attributes, wheel
-      matrix (aarch64, musllinux, universal2), classifiers
+      Done: `coordinates()` returns vertices as a NumPy array (NumPy imported lazily);
+      the shapefile readers release the GIL with `allow_threads`.
+      Open: zipped shapefile geometry+attributes (needs a zip decoder, which is a new
+      dependency decision), wheel matrix (aarch64, musllinux, universal2), classifiers
 
 ### 4.7 Docs & adoption
 - [ ] `docs/coming-from-gdal-proj-geos.md`: parity table + side-by-side with
