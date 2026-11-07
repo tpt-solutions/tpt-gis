@@ -412,7 +412,7 @@ the same logic, not real GDAL/QGIS/libtiff output; add third-party fixtures.
 - [ ] GeoPackage blob header: wrong flag bits (byte order = bit 0, envelope =
       bits 1–3, empty = bit 4) and envelope sizes (32/48/64 B); verify against a
       GDAL-written `.gpkg`
-- [ ] GeoPackage writer: set `application_id`/`user_version`, add srs rows 0 and -1,
+- [x] GeoPackage writer: set `application_id`/`user_version`, add srs rows 0 and -1,
       sort/dedupe rowids, lift single-4KiB-page limit (>~250 vertices → `WriteTooLarge`)
 - [x] GeoPackage reader: tolerate rows with fewer columns than schema
       (`ALTER TABLE ADD COLUMN`); don't swallow geometry decode errors
