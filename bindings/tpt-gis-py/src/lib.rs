@@ -204,6 +204,9 @@ fn geodesic_distance(a: &GeoPoint, b: &GeoPoint, ellipsoid: &str) -> PyResult<f6
         Err(GeodesicError::ConvergenceFailure) => Err(PyValueError::new_err(
             "geodesic inverse failed to converge (near-antipodal points)",
         )),
+        Err(GeodesicError::InvalidInput) => Err(PyValueError::new_err(
+            "invalid coordinates: values must be finite and latitude within [-90, 90]",
+        )),
     }
 }
 
@@ -222,6 +225,9 @@ fn geodesic_inverse(a: &GeoPoint, b: &GeoPoint, ellipsoid: &str) -> PyResult<PyI
         Err(GeodesicError::ConvergenceFailure) => Err(PyValueError::new_err(
             "geodesic inverse failed to converge (near-antipodal points)",
         )),
+        Err(GeodesicError::InvalidInput) => Err(PyValueError::new_err(
+            "invalid coordinates: values must be finite and latitude within [-90, 90]",
+        )),
     }
 }
 
@@ -236,7 +242,9 @@ fn geodesic_destination(
 ) -> PyResult<GeoPoint> {
     let ell = parse_ellipsoid(ellipsoid)?;
     let p0 = CoreGeoPoint::new(start.lat_deg, start.lon_deg);
-    let dest = geodesic::direct(&ell, p0, initial_bearing_deg, distance_m).destination;
+    let dest = geodesic::direct(&ell, p0, initial_bearing_deg, distance_m)
+        .map_err(|_| PyValueError::new_err("invalid input for geodesic direct problem"))?
+        .destination;
     Ok(GeoPoint {
         lat_deg: dest.lat_deg,
         lon_deg: dest.lon_deg,
