@@ -106,6 +106,10 @@ enum Commands {
         /// Output format. Default: from the output extension, else GeoJSON.
         #[arg(long)]
         to: Option<String>,
+
+        /// Write the GeoPackage R-tree spatial index (GeoPackage output only).
+        #[arg(long)]
+        spatial_index: bool,
     },
     /// Print a JSON summary of a vector file: feature count, geometry types, bounds,
     /// and property names.
@@ -198,7 +202,9 @@ where
         Commands::GenerateFixtures { points, polygons, seed, output } => {
             run_generate_fixtures(points, polygons, seed, output)
         }
-        Commands::Convert { input, output, from, to } => run_convert(input, output, from, to),
+        Commands::Convert { input, output, from, to, spatial_index } => {
+            run_convert(input, output, from, to, spatial_index)
+        }
         Commands::Info { input } => run_info(input),
         Commands::Validate { input } => run_validate(&input),
         Commands::Completions { shell } => {
@@ -301,6 +307,7 @@ fn run_convert(
     output: Option<String>,
     from: Option<String>,
     to: Option<String>,
+    spatial_index: bool,
 ) -> Result<(), String> {
     let in_format = resolve_format(from.as_deref(), Some(&input), "from")?;
     let bytes = if input == "-" {
@@ -337,7 +344,10 @@ fn run_convert(
         };
         return write_shapefile_files(path, &features, prj.as_deref());
     }
-    let encoded = convert::write_features(out_format, &features)?;
+    if spatial_index && out_format != convert::Format::GeoPackage {
+        return Err("--spatial-index applies only to GeoPackage output".to_string());
+    }
+    let encoded = convert::write_features(out_format, &features, spatial_index)?;
     match output.as_deref() {
         Some(path) if path != "-" => {
             std::fs::write(path, &encoded).map_err(|e| format!("failed to write {path}: {e}"))

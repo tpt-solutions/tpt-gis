@@ -123,7 +123,11 @@ pub fn read_features(format: Format, bytes: &[u8]) -> Result<Vec<Feature>, Strin
 /// # Errors
 /// Returns a message if the format cannot be written (shapefile output is not
 /// supported) or the encoder rejects the data.
-pub fn write_features(format: Format, features: &[Feature]) -> Result<Vec<u8>, String> {
+pub fn write_features(
+    format: Format,
+    features: &[Feature],
+    spatial_index: bool,
+) -> Result<Vec<u8>, String> {
     match format {
         Format::GeoJson => {
             let fc = FeatureCollection { features: features.to_vec() };
@@ -152,7 +156,7 @@ pub fn write_features(format: Format, features: &[Feature]) -> Result<Vec<u8>, S
                 srs_id: 4326,
                 id_column: None,
                 description: None,
-                spatial_index: false,
+                spatial_index,
             };
             write_gpkg(features, &opts).map_err(|e| format!("failed to write GeoPackage: {e}"))
         }
@@ -460,7 +464,7 @@ mod tests {
         let wkt = b"POINT (1 2)\nLINESTRING (0 0, 3 4)\n";
         let features = read_features(Format::Wkt, wkt).unwrap();
         assert_eq!(features.len(), 2);
-        let json = write_features(Format::GeoJson, &features).unwrap();
+        let json = write_features(Format::GeoJson, &features, false).unwrap();
         let back = read_features(Format::GeoJson, &json).unwrap();
         assert_eq!(back.len(), 2);
         assert_eq!(back[0].geometry, features[0].geometry);
@@ -475,14 +479,14 @@ mod tests {
     #[test]
     fn geopackage_round_trip_preserves_geometry() {
         let features = read_features(Format::Wkt, b"POINT (5 6)\n").unwrap();
-        let bytes = write_features(Format::GeoPackage, &features).unwrap();
+        let bytes = write_features(Format::GeoPackage, &features, true).unwrap();
         let back = read_features(Format::GeoPackage, &bytes).unwrap();
         assert_eq!(back[0].geometry, features[0].geometry);
     }
 
     #[test]
     fn shapefile_output_is_refused_clearly() {
-        let err = write_features(Format::Shapefile, &[]).unwrap_err();
+        let err = write_features(Format::Shapefile, &[], false).unwrap_err();
         assert!(err.contains("not supported"), "{err}");
     }
 

@@ -46,7 +46,7 @@ so input coordinates are taken as already on that datum. Every part of multi-par
 ## convert
 
 ```sh
-tptgis convert --input <file|-> [--output <file>] [--from <fmt>] [--to <fmt>]
+tptgis convert --input <file|-> [--output <file>] [--from <fmt>] [--to <fmt>] [--spatial-index]
 ```
 
 Formats are inferred from extensions, or set with `--from` and `--to`:
@@ -60,6 +60,8 @@ Formats are inferred from extensions, or set with `--from` and `--to`:
 | GeoPackage | `.gpkg` | yes | yes (table `features`, geometry column `geom`, SRID 4326) |
 
 - Use `--input -` to read standard input; it needs `--from`.
+- `--spatial-index` writes the GeoPackage R-tree index (`rtree_features_geom`) so that GDAL and
+  QGIS can answer bounding-box queries quickly. It is an error for other output formats.
 - Writing a shapefile needs an `--output` name ending in `.shp`. The `.shx`, `.dbf`, and `.cpg`
   files are written beside it. A shapefile holds one shape type, so mixed geometry types are
   an error. Property names are at most 10 characters, text fields at most 254 bytes, and

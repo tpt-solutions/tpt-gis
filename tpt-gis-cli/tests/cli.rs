@@ -424,3 +424,42 @@ fn shapefile_projection_sidecars() {
         .expect("copy shapefile");
     assert_eq!(fs::read_to_string(dir.join("copy.prj")).unwrap(), custom);
 }
+
+#[test]
+fn convert_to_geopackage_with_spatial_index_writes_the_rtree() {
+    let dir = scratch("gpkg_index");
+    let wkt = dir.join("pts.wkt");
+    std::fs::write(&wkt, "POINT (1 2)\nPOINT (3 4)\n").unwrap();
+    let gpkg = dir.join("indexed.gpkg");
+    run_with_args(args(&[
+        "convert",
+        "--input",
+        &path_str(&wkt),
+        "--output",
+        &path_str(&gpkg),
+        "--spatial-index",
+    ]))
+    .expect("write indexed gpkg");
+    let bytes = std::fs::read(&gpkg).unwrap();
+    let text = String::from_utf8_lossy(&bytes);
+    assert!(text.contains("CREATE VIRTUAL TABLE"), "no rtree table in the file");
+    assert!(text.contains("gpkg_rtree_index"), "no extension row in the file");
+}
+
+#[test]
+fn spatial_index_is_refused_for_other_formats() {
+    let dir = scratch("gpkg_index_refused");
+    let wkt = dir.join("pt.wkt");
+    std::fs::write(&wkt, "POINT (1 2)\n").unwrap();
+    let out = dir.join("pt.geojson");
+    let err = run_with_args(args(&[
+        "convert",
+        "--input",
+        &path_str(&wkt),
+        "--output",
+        &path_str(&out),
+        "--spatial-index",
+    ]))
+    .unwrap_err();
+    assert!(err.contains("GeoPackage"), "{err}");
+}
