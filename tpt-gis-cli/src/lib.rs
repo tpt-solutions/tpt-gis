@@ -268,6 +268,21 @@ fn resolve_format(
     }
 }
 
+/// Writes a shapefile set beside `path`: `.shp`, `.shx`, `.dbf`, and a `.cpg` naming UTF-8.
+fn write_shapefile_files(path: &str, features: &[Feature]) -> Result<(), String> {
+    let (shp, dbf) = convert::write_shapefile_features(features)?;
+    let base = std::path::Path::new(path);
+    let write = |ext: &str, bytes: &[u8]| {
+        let target = base.with_extension(ext);
+        std::fs::write(&target, bytes)
+            .map_err(|e| format!("failed to write {}: {e}", target.display()))
+    };
+    write("shp", &shp.shp)?;
+    write("shx", &shp.shx)?;
+    write("dbf", &dbf)?;
+    write("cpg", b"UTF-8\n")
+}
+
 fn run_convert(
     input: String,
     output: Option<String>,
@@ -293,6 +308,13 @@ fn run_convert(
         (None, None) => convert::Format::GeoJson,
         _ => resolve_format(to.as_deref(), output.as_deref(), "to")?,
     };
+    if out_format == convert::Format::Shapefile {
+        let path = output
+            .as_deref()
+            .filter(|p| *p != "-")
+            .ok_or("writing a shapefile needs --output <name>.shp (it cannot go to stdout)")?;
+        return write_shapefile_files(path, &features);
+    }
     let encoded = convert::write_features(out_format, &features)?;
     match output.as_deref() {
         Some(path) if path != "-" => {

@@ -24,6 +24,7 @@ use tpt_gis_io::geojson::{
 use tpt_gis_io::geometry::{Geometry, Point};
 use tpt_gis_io::geopackage::{read_gpkg, write_gpkg, WriteOptions};
 use tpt_gis_io::shapefile::{self, DbfEncoding, DbfValue};
+use tpt_gis_io::shapefile_writer::{self, DbfField, DbfFieldKind, ShapefileBytes};
 
 /// A supported vector file format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -211,6 +212,118 @@ fn dbf_to_json(value: DbfValue) -> Value {
             Value::String(format!("{year:04}-{month:02}-{day:02}"))
         }
     }
+}
+
+/// The widest text a dBASE character field can hold.
+const DBF_MAX_WIDTH: usize = 254;
+
+/// A JSON property value as a dBASE value. Nested arrays and objects are stored as their
+/// JSON text.
+fn json_to_dbf(value: &Value) -> Option<DbfValue> {
+    match value {
+        Value::Null => None,
+        Value::Bool(b) => Some(DbfValue::Logical(Some(*b))),
+        Value::Number(n) => Some(DbfValue::Numeric(n.as_f64().unwrap_or(f64::NAN))),
+        Value::String(s) => Some(DbfValue::Character(s.clone())),
+        other => Some(DbfValue::Character(other.to_string())),
+    }
+}
+
+/// Chooses a dBASE field for a property from every value it takes. Mixed types fall back to
+/// text, and numbers are written as integers only when every value is one.
+fn infer_field(name: &str, values: &[Option<DbfValue>]) -> Result<DbfField, String> {
+    let present: Vec<&DbfValue> = values.iter().flatten().collect();
+    let all_bool = present.iter().all(|v| matches!(v, DbfValue::Logical(_)));
+    let all_number = present.iter().all(|v| matches!(v, DbfValue::Numeric(_)));
+    let kind = if present.is_empty() || (all_bool && !present.is_empty()) {
+        if present.is_empty() {
+            DbfFieldKind::Character { width: 1 }
+        } else {
+            DbfFieldKind::Logical
+        }
+    } else if all_number {
+        let numbers: Vec<f64> = present
+            .iter()
+            .filter_map(|v| match v {
+                DbfValue::Numeric(n) => Some(*n),
+                _ => None,
+            })
+            .collect();
+        let integers = numbers.iter().all(|n| n.is_finite() && n.fract() == 0.0);
+        if integers {
+            let width = numbers.iter().map(|n| format!("{n:.0}").len()).max().unwrap_or(1).max(1);
+            DbfFieldKind::Numeric { width: width.min(255) as u8, decimals: 0 }
+        } else {
+            let decimals = 8usize;
+            let width = numbers.iter().map(|n| format!("{n:.decimals$}").len()).max().unwrap_or(1);
+            if width > 20 {
+                return Err(format!(
+                    "field {name:?}: numbers need {width} characters, the dBASE limit is 20"
+                ));
+            }
+            DbfFieldKind::Numeric { width: width as u8, decimals: decimals as u8 }
+        }
+    } else {
+        let width = present
+            .iter()
+            .map(|v| match v {
+                DbfValue::Character(s) => s.len(),
+                other => dbf_text(other).len(),
+            })
+            .max()
+            .unwrap_or(1)
+            .max(1);
+        if width > DBF_MAX_WIDTH {
+            return Err(format!(
+                "field {name:?}: a value is {width} bytes, the dBASE text limit is {DBF_MAX_WIDTH}"
+            ));
+        }
+        DbfFieldKind::Character { width: width as u8 }
+    };
+    Ok(DbfField { name: name.to_string(), kind })
+}
+
+/// A value's text, as a text field would store it.
+fn dbf_text(value: &DbfValue) -> String {
+    match value {
+        DbfValue::Character(s) => s.clone(),
+        DbfValue::Numeric(n) => n.to_string(),
+        DbfValue::Logical(Some(b)) => (if *b { "T" } else { "F" }).to_string(),
+        DbfValue::Logical(None) => String::new(),
+        DbfValue::Date { year, month, day } => format!("{year:04}-{month:02}-{day:02}"),
+    }
+}
+
+/// The `.shp`, `.shx`, and `.dbf` bytes for a feature list. Property names become dBASE
+/// fields in the order they first appear. The `.dbf` is written as UTF-8 (see the `.cpg`).
+///
+/// # Errors
+/// Returns a message if the geometries cannot share one shapefile type, a property name is
+/// longer than 10 characters, or a value is too wide for its field.
+pub fn write_shapefile_features(features: &[Feature]) -> Result<(ShapefileBytes, Vec<u8>), String> {
+    let geometries: Vec<Option<Geometry>> = features.iter().map(|f| f.geometry.clone()).collect();
+    let shp = shapefile_writer::write_shapefile(&geometries).map_err(|e| e.to_string())?;
+
+    let mut names: Vec<String> = Vec::new();
+    for f in features {
+        for key in f.properties.keys() {
+            if !names.contains(key) {
+                names.push(key.clone());
+            }
+        }
+    }
+    let mut fields = Vec::new();
+    for name in &names {
+        let values: Vec<Option<DbfValue>> =
+            features.iter().map(|f| f.properties.get(name).and_then(json_to_dbf)).collect();
+        fields.push(infer_field(name, &values)?);
+    }
+    let rows: Vec<Vec<Option<DbfValue>>> = features
+        .iter()
+        .map(|f| names.iter().map(|n| f.properties.get(n).and_then(json_to_dbf)).collect())
+        .collect();
+    let dbf = shapefile_writer::write_dbf(&fields, &rows).map_err(|e| e.to_string())?;
+    Ok((shp, dbf))
 }
 
 fn feature(geometry: Option<Geometry>) -> Feature {

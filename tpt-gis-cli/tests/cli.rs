@@ -343,3 +343,58 @@ fn mismatched_dbf_row_count_is_an_error() {
     let err = run_with_args(args(&["info", &path_str(&shp)])).unwrap_err();
     assert!(err.contains("1 records") && err.contains("2"), "{err}");
 }
+
+/// GeoJSON → shapefile → GeoJSON keeps the geometry and the attributes (text, numbers, and
+/// logicals), and writes the sidecar files.
+#[test]
+fn shapefile_round_trip_keeps_attributes() {
+    let dir = scratch("shp-write");
+    let input = dir.join("cities.geojson");
+    let shp = dir.join("cities.shp");
+    let back = dir.join("back.geojson");
+    fs::write(
+        &input,
+        r#"{"type":"FeatureCollection","features":[
+            {"type":"Feature","properties":{"name":"Zoë","pop":1234.5,"capital":true},
+             "geometry":{"type":"Point","coordinates":[1,2]}},
+            {"type":"Feature","properties":{"name":"Oslo","pop":700000,"capital":false},
+             "geometry":{"type":"Point","coordinates":[3,4]}}]}"#,
+    )
+    .unwrap();
+
+    run_with_args(args(&["convert", "--input", &path_str(&input), "--output", &path_str(&shp)]))
+        .expect("write shapefile");
+    for ext in ["shp", "shx", "dbf", "cpg"] {
+        assert!(dir.join(format!("cities.{ext}")).exists(), "missing .{ext}");
+    }
+    run_with_args(args(&["convert", "--input", &path_str(&shp), "--output", &path_str(&back)]))
+        .expect("read shapefile back");
+
+    let json: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&back).unwrap()).unwrap();
+    let features = json["features"].as_array().unwrap();
+    assert_eq!(features.len(), 2);
+    assert_eq!(features[0]["properties"]["name"], "Zoë");
+    assert_eq!(features[0]["properties"]["pop"], 1234.5);
+    assert_eq!(features[0]["properties"]["capital"], true);
+    assert_eq!(features[1]["properties"]["pop"], 700000.0);
+    assert_eq!(features[1]["properties"]["capital"], false);
+    assert_eq!(features[1]["geometry"]["coordinates"], serde_json::json!([3.0, 4.0]));
+}
+
+/// Mixed geometry types cannot share one shapefile; the error says so.
+#[test]
+fn shapefile_output_refuses_mixed_geometry_types() {
+    let dir = scratch("shp-mixed");
+    let input = dir.join("mixed.wkt");
+    fs::write(&input, "POINT (1 2)\nLINESTRING (0 0, 1 1)\n").unwrap();
+    let err = run_with_args(args(&[
+        "convert",
+        "--input",
+        &path_str(&input),
+        "--output",
+        &path_str(&dir.join("mixed.shp")),
+    ]))
+    .unwrap_err();
+    assert!(err.contains("mix shape types"), "{err}");
+}
