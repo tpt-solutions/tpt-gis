@@ -4,14 +4,22 @@
 //! owning it, so they can be built over `const`/`static` data with zero heap
 //! allocation — the requirement driving the drone geofence MVP (see `todo.md`).
 //!
-//! Boolean set operations (`buffer`, `union`, `difference`) are not yet implemented —
-//! they require a general polygon-clipping algorithm (e.g. Weiler-Atherton or
-//! Martinez-Rueda) that is tracked as a follow-up rather than attempted here.
+//! Polygon boolean operations (`union`, `intersection`, `difference`,
+//! `symmetric_difference`) are in [`clip`], behind the `alloc` feature, because their
+//! output must be allocated. They use the Martinez–Rueda–Feito sweep. `buffer` is not
+//! implemented yet.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 #![warn(missing_docs)]
 
+#[cfg(feature = "alloc")]
+extern crate alloc;
+
 pub mod bbox;
+#[cfg(feature = "alloc")]
+pub mod buffer;
+#[cfg(feature = "alloc")]
+pub mod clip;
 pub mod distance;
 pub mod hull;
 pub mod line_string;
@@ -21,6 +29,8 @@ pub mod overlay;
 pub mod point;
 pub mod polygon;
 pub mod predicates;
+#[cfg(feature = "alloc")]
+pub mod relate;
 pub mod simplify;
 pub mod validity;
 

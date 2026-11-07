@@ -17,7 +17,6 @@ workspace = true
 
 [dependencies]
 libm = { version = "0.2", default-features = false }
-serde = { version = "1", default-features = false, features = ["derive"], optional = true }
 
 [dev-dependencies]
 proptest = "1.0"
@@ -25,8 +24,9 @@ proptest = "1.0"
 [features]
 default = []
 std = []
+## Allocating operations (polygon boolean ops in `clip`). Off by default so the
+## base crate stays allocation-free.
 alloc = []
-serde = ["dep:serde"]
 
 [package.metadata.docs.rs]
 all-features = true
