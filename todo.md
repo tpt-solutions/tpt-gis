@@ -484,7 +484,7 @@ the same logic, not real GDAL/QGIS/libtiff output; add third-party fixtures.
 - [x] **Geofence compiler**: `tptgis geofence-compile in.geojson > fence.rs` emitting a
       `const` `no_std` zero-alloc polygon + bbox table for drone/IoT firmware
 - [ ] Browser/WASM playground (GitHub Pages): load GeoJSON, reproject, join client-side
-- [ ] `tptgis validate` / `doctor` for COG layout, GeoPackage, GeoJSON
+- [x] `tptgis validate` / `doctor` for COG layout, GeoPackage, GeoJSON
 - [ ] `tptgis cog-tiles`: XYZ tile server over HTTP-range COGs
 - [ ] Differential tests against stored GDAL/PROJ/GEOS-generated fixtures
 

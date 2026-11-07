@@ -12,6 +12,7 @@ Run `tptgis --help` or `tptgis <command> --help` for the authoritative flag list
 | [`reproject`](#reproject) | Reproject a GeoJSON file from WGS84 |
 | [`convert`](#convert) | Convert between GeoJSON, WKT, WKB, Shapefile, and GeoPackage |
 | [`info`](#info) | Summarise a vector file as JSON |
+| [`validate`](#validate) | Check vector geometry and GeoTIFF COG layout |
 | [`geofence-compile`](#geofence-compile) | Emit a `no_std` Rust module of polygon data |
 | [`generate-fixtures`](#generate-fixtures) | Write synthetic GeoJSON test data |
 
@@ -74,6 +75,22 @@ tptgis info <file>
 Prints a JSON object with the format, feature count, features without geometry,
 geometry-type counts, the bounding box `[min_x, min_y, max_x, max_y]`, and the
 property names found across all features.
+
+## validate
+
+```sh
+tptgis validate <file>
+```
+
+Checks a file and prints a JSON report with `valid`, the format, and a `problems` list.
+The command exits with an error when any problem is found.
+
+- Polygons (and parts of multi-polygons) must be valid: closed, simple rings, with holes
+  inside the exterior.
+- Line strings need at least two points.
+- `.tif` and `.tiff` files are checked against the Cloud-Optimized GeoTIFF layout rules.
+  Errors (not tiled, out-of-range data, non-internal layout) make the file invalid.
+  Warnings (missing overviews, missing georeferencing) do not.
 
 ## geofence-compile
 
