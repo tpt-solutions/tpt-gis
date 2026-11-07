@@ -137,6 +137,10 @@ fn sub(p: Point, q: Point) -> Point {
     Point::new(p.x - q.x, p.y - q.y)
 }
 
+fn dot(u: Point, v: Point) -> f64 {
+    u.x * v.x + u.y * v.y
+}
+
 fn cross(u: Point, v: Point) -> f64 {
     u.x * v.y - u.y * v.x
 }
@@ -323,10 +327,17 @@ fn split_edges(segs: &[Seg], scale: f64) -> Vec<Seg> {
         let mut pts = core::mem::take(&mut cuts[i]);
         pts.push(s.a);
         pts.push(s.b);
-        pts.sort_by(|p, q| lex_cmp(*p, *q));
+        // Order the points by their position along the edge, not lexicographically. For a
+        // nearly vertical edge the x values of its points can round in either direction, so
+        // lexicographic order can put a cut before the edge's own endpoint.
+        let dir = sub(s.b, s.a);
+        let along = |p: &Point| dot(sub(*p, s.a), dir);
+        pts.sort_by(|p, q| along(p).total_cmp(&along(q)));
         pts.dedup();
         for w in pts.windows(2) {
-            out.push(Seg { a: w[0], b: w[1], poly: s.poly });
+            let (lo, hi) =
+                if lex_cmp(w[0], w[1]) == Ordering::Less { (w[0], w[1]) } else { (w[1], w[0]) };
+            out.push(Seg { a: lo, b: hi, poly: s.poly });
         }
     }
     out
