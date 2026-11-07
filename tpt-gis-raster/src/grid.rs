@@ -1,7 +1,7 @@
 //! [`Grid<T>`]: a dense, row-major 2D array of cells.
 //!
 //! A grid is pure geometry-free storage: `width * height` cells of a single
-//! [`CellType`], laid out one row after another, with no georeferencing and no
+//! [`CellType`](crate::cell::CellType), laid out one row after another, with no georeferencing and no
 //! nodata value. Pair it with a [`GeoTransform`](crate::GeoTransform) in a
 //! [`Band`](crate::Band) to get something that knows where it is on the planet.
 //!

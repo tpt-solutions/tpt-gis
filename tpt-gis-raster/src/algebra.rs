@@ -13,12 +13,12 @@
 //!   zero, and produce nodata only when the whole window is nodata (or, for
 //!   [`focal_kernel`], when any contributing cell is missing — see below).
 //! * The output's sentinel is the left/only input's nodata value, falling back
-//!   to [`CellType::ZERO`](crate::CellType::ZERO) when the input declares none.
+//!   to `CellType::ZERO` when the input declares none.
 //!   With no sentinel there is no way to say "unknown", so an operation that
 //!   would produce one writes zero; declare a nodata value if that matters.
 //!
 //! Integer arithmetic saturates instead of wrapping
-//! ([`CellType::saturating_add`](crate::CellType::saturating_add) and friends):
+//! (`CellType::saturating_add` and friends):
 //! wrapping a `u8` slope raster from 255 to 0 turns a cliff into a plain.
 //!
 //! # Example

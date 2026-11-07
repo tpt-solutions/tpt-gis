@@ -3,7 +3,7 @@
 //!
 //! The file readers have their own error types
 //! ([`GeoTiffError`](crate::geotiff::GeoTiffError),
-//! [`CogError`](crate::cog::CogError)) because their failure modes are entirely
+//! `CogError`) because their failure modes are entirely
 //! about malformed input rather than about a caller passing mismatched grids.
 
 use core::fmt;

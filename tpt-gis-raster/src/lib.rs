@@ -25,7 +25,7 @@
 //!   and resampling layers are `no_std` + `alloc` and stay available without it,
 //!   so a grid can be manipulated on an embedded target; only the file readers
 //!   need `std` (DEFLATE decoding is exposed as `std::io` streams by `flate2`).
-//! * `http` (off by default) — the async [`http`] module: a Range-request
+//! * `http` (off by default) — the async `http` module: a Range-request
 //!   reader that fetches only the header and the tiles actually asked for, so a
 //!   remote COG can be read without downloading it. Implies `std` and pulls in
 //!   `reqwest` (rustls, no OpenSSL FFI).

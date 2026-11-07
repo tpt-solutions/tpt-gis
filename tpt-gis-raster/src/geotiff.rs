@@ -1,13 +1,13 @@
 //! A from-scratch (Geo)TIFF reader — classic TIFF, BigTIFF, strips and tiles,
 //! uncompressed / PackBits / DEFLATE / LZW, with the horizontal and floating-point
 //! predictors — and a GeoTIFF georeferencing layer that turns the geo-keys into a
-//! [`GeoTransform`](crate::GeoTransform).
+//! [`GeoTransform`].
 //!
 //! The reader is *synchronous* and reads every byte through a `fetch` closure
 //! (`offset`, `len` -> bytes). That single seam lets the same decoder serve a
 //! file loaded into memory ([`read`]) and a remote COG read tile-by-tile over HTTP
-//! range requests ([`crate::http`] builds a `fetch` closure from the bytes it has
-//! fetched so far). The output is a single [`AnyBand`](crate::AnyBand) — the
+//! range requests (the `http` module builds a `fetch` closure from the bytes it has
+//! fetched so far). The output is a single [`AnyBand`] — the
 //! dynamically-typed band a file reader must return, since the sample type lives
 //! in the file header rather than in the caller's types.
 //!
@@ -23,7 +23,7 @@
 //! * Floating-point predictor (3) and horizontal predictor (2).
 //! * Rotated (non-north-up) transforms are not modelled: the georeferencing layer
 //!   reads the axis-aligned coefficients and ignores any rotation, exactly as
-//!   [`GeoTransform`](crate::GeoTransform) does.
+//!   [`GeoTransform`] does.
 //!
 //! # Example
 //!
@@ -1181,12 +1181,30 @@ fn is_zlib_header(raw: &[u8]) -> bool {
 /// is checked against `expected` so an over-long stream cannot masquerade as valid
 /// pixel data.
 fn decode_lzw(raw: &[u8], expected: usize) -> Result<Vec<u8>> {
+    use weezl::LzwStatus;
     let mut decoder = weezl::decode::Decoder::with_tiff_size_switch(weezl::BitOrder::Msb, 8);
-    let decoded = decoder.decode(raw).map_err(|_| GeoTiffError::Decompress("LZW"))?;
-    if decoded.len() > expected {
-        return Err(GeoTiffError::SizeMismatch("LZW output exceeds declared size"));
+    let mut out = Vec::with_capacity(expected.min(1 << 20));
+    let mut scratch = vec![0u8; 1 << 16];
+    let mut input = raw;
+    // Decode in bounded chunks and check the size after each one, so a stream that
+    // expands past its declared size is rejected before it can grow the output much.
+    loop {
+        let result = decoder.decode_bytes(input, &mut scratch);
+        out.extend_from_slice(&scratch[..result.consumed_out]);
+        if out.len() > expected {
+            return Err(GeoTiffError::SizeMismatch("LZW output exceeds declared size"));
+        }
+        input = &input[result.consumed_in..];
+        match result.status {
+            Err(_) | Ok(LzwStatus::NoProgress) => return Err(GeoTiffError::Decompress("LZW")),
+            Ok(LzwStatus::Done) => return Ok(out),
+            Ok(LzwStatus::Ok) => {
+                if result.consumed_in == 0 && result.consumed_out == 0 {
+                    return Err(GeoTiffError::Decompress("LZW"));
+                }
+            }
+        }
     }
-    Ok(decoded)
 }
 
 /// Decodes a PackBits run-length-encoded strip/tile. PackBits output is inherently
@@ -2573,5 +2591,33 @@ mod float_predictor_tests {
         let mut wrong = float_predictor_encode(&original, row_samples, rows, 4, spp);
         undo_float_predictor(&mut wrong, row_samples, rows, 4, true, 1).unwrap();
         assert_ne!(wrong, original);
+    }
+}
+
+#[cfg(test)]
+mod lzw_tests {
+    use super::*;
+
+    fn lzw_tiff_encode(data: &[u8]) -> Vec<u8> {
+        weezl::encode::Encoder::with_tiff_size_switch(weezl::BitOrder::Msb, 8)
+            .encode(data)
+            .expect("lzw encode")
+    }
+
+    #[test]
+    fn lzw_decodes_a_stream_of_the_declared_size() {
+        let data: Vec<u8> = (0..5000u32).map(|i| (i % 37) as u8).collect();
+        let encoded = lzw_tiff_encode(&data);
+        assert_eq!(decode_lzw(&encoded, data.len()).unwrap(), data);
+    }
+
+    #[test]
+    fn lzw_refuses_output_larger_than_declared() {
+        let data = vec![7u8; 200_000];
+        let encoded = lzw_tiff_encode(&data);
+        assert!(matches!(
+            decode_lzw(&encoded, 1000),
+            Err(GeoTiffError::SizeMismatch("LZW output exceeds declared size"))
+        ));
     }
 }

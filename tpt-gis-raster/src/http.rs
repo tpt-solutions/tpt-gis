@@ -2,7 +2,7 @@
 //!
 //! A COG is read without downloading the whole file: the header and IFD are
 //! fetched first (a small prefix), then only the tiles overlapping the requested
-//! region are fetched on demand. The crate's synchronous [`geotiff`] decoder is
+//! region are fetched on demand. The crate's synchronous `geotiff` decoder is
 //! driven through a `fetch` closure built from the bytes gathered so far.
 //!
 //! This module is only available with the `http` feature, which pulls in
