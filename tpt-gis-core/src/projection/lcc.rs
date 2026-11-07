@@ -181,6 +181,14 @@ mod tests {
 
     /// Paris (2.35°E, 48.86°N) lies north-west of the origin (3°E, 46.5°N), so in
     /// Lambert-93 its easting is below the false easting and its northing above.
+    /// Reference point from PROJ (EPSG:2154, via rasterio), in metres.
+    #[test]
+    fn paris_matches_proj_for_lambert93() {
+        let p = LambertConformal::lambert93().forward(GeoPoint::new(48.8566, 2.3522));
+        assert!((p.x - 652_469.022_709).abs() < 1.0, "{p:?}");
+        assert!((p.y - 6_862_035.259_420).abs() < 1.0, "{p:?}");
+    }
+
     #[test]
     fn paris_is_north_west_of_the_origin() {
         let p = LambertConformal::lambert93().forward(GeoPoint::new(48.8566, 2.3522));

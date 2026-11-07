@@ -38,8 +38,10 @@ tptgis reproject --input <input.geojson> --crs <target> [--output <out.geojson>]
 ```
 
 Targets: `web-mercator` (EPSG:3857), `utm-<zone><n|s>` such as `utm-18n` or `utm-33s`,
-or an EPSG code the library knows: `EPSG:4326`, `EPSG:3857`, `EPSG:32601`–`EPSG:32660`,
-and `EPSG:32701`–`EPSG:32760`. Every part of multi-part geometries and geometry collections is projected.
+or an EPSG code the library knows: `EPSG:4326`, `EPSG:3857`, `EPSG:2154` (Lambert-93),
+`EPSG:5070` (Conus Albers), `EPSG:32601`–`EPSG:32660`, and `EPSG:32701`–`EPSG:32760`.
+Lambert-93 and Conus Albers are computed on GRS80 with no datum shift from WGS84 input,
+so input coordinates are taken as already on that datum. Every part of multi-part geometries and geometry collections is projected.
 
 ## convert
 

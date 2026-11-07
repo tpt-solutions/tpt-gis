@@ -74,6 +74,13 @@ impl Albers {
         Self { a, e, e2, n, c, rho0, lon0: lon0_deg.to_radians(), false_easting, false_northing }
     }
 
+    /// NAD83 / Conus Albers (EPSG:5070): GRS80, origin 23°N 96°W, standard parallels
+    /// 29.5°N and 45.5°N, no false origin offset.
+    #[must_use]
+    pub fn conus_albers() -> Self {
+        Self::new(&Ellipsoid::GRS80, 23.0, -96.0, 29.5, 45.5, 0.0, 0.0)
+    }
+
     /// The cone constant `n`.
     #[must_use]
     pub fn cone_constant(&self) -> f64 {
@@ -138,7 +145,21 @@ mod tests {
     /// USGS conterminous-US Albers parameters (NAD83): origin 23°N 96°W, standard
     /// parallels 29.5°N and 45.5°N.
     fn conus() -> Albers {
-        Albers::new(&Ellipsoid::GRS80, 23.0, -96.0, 29.5, 45.5, 0.0, 0.0)
+        Albers::conus_albers()
+    }
+
+    /// Reference points from PROJ (EPSG:5070, via rasterio), in metres.
+    #[test]
+    fn matches_proj_for_conus_albers() {
+        let cases = [
+            ((39.74, -104.99), -762_375.214_768, 1_893_930.439_596),
+            ((25.76, -80.19), 1_594_288.146_038, 434_316.239_231),
+            ((37.77, -122.42), -2_275_632.970_779, 1_955_421.688_045),
+        ];
+        for ((lat, lon), x, y) in cases {
+            let p = conus().forward(GeoPoint::new(lat, lon));
+            assert!((p.x - x).abs() < 1.0 && (p.y - y).abs() < 1.0, "{lat},{lon}: {p:?}");
+        }
     }
 
     #[test]

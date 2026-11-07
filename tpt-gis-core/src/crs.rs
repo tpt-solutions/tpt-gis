@@ -15,6 +15,10 @@ pub enum Crs {
     WebMercator,
     /// Universal Transverse Mercator, in a specific zone (EPSG:326xx / 327xx).
     Utm(Zone),
+    /// RGF93 / Lambert-93, the French national grid (EPSG:2154).
+    Lambert93,
+    /// NAD83 / Conus Albers, the contiguous-US equal-area grid (EPSG:5070).
+    ConusAlbers,
 }
 
 impl Crs {
@@ -25,6 +29,8 @@ impl Crs {
             Crs::Wgs84 => 4326,
             Crs::WebMercator => 3857,
             Crs::Utm(zone) => zone.epsg_code(),
+            Crs::Lambert93 => 2154,
+            Crs::ConusAlbers => 5070,
         }
     }
 }

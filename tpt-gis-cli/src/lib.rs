@@ -566,7 +566,7 @@ fn parse_crs(s: &str) -> Result<Crs, String> {
                 code[5..].parse().map_err(|_| format!("invalid EPSG code in '{s}'"))?;
             tpt_gis_core::epsg::lookup(number).ok_or_else(|| {
                 format!(
-                    "EPSG:{number} is not supported (supported: 4326, 3857, 32601-32660, 32701-32760)"
+                    "EPSG:{number} is not supported (supported: 4326, 3857, 2154, 5070, 32601-32660, 32701-32760)"
                 )
             })
         }
@@ -633,6 +633,8 @@ fn project_forward(geo: GeoPoint, target: Crs) -> PlanarPoint {
             tpt_gis_core::projection::utm::forward(&tpt_gis_core::Ellipsoid::WGS84, geo, zone)
         }
         Crs::Wgs84 => PlanarPoint::new(geo.lon_deg, geo.lat_deg),
+        Crs::Lambert93 => tpt_gis_core::projection::lcc::LambertConformal::lambert93().forward(geo),
+        Crs::ConusAlbers => tpt_gis_core::projection::albers::Albers::conus_albers().forward(geo),
     }
 }
 
@@ -722,8 +724,14 @@ mod tests {
 
     #[test]
     fn parse_crs_rejects_unsupported_epsg_codes_with_the_list() {
-        let err = parse_crs("EPSG:2154").unwrap_err();
-        assert!(err.contains("EPSG:2154") && err.contains("3857"), "{err}");
+        let err = parse_crs("EPSG:27700").unwrap_err();
+        assert!(err.contains("EPSG:27700") && err.contains("3857"), "{err}");
+    }
+
+    #[test]
+    fn parse_crs_accepts_lambert93_and_conus_albers() {
+        assert!(matches!(parse_crs("EPSG:2154"), Ok(Crs::Lambert93)));
+        assert!(matches!(parse_crs("epsg:5070"), Ok(Crs::ConusAlbers)));
     }
 
     /// The unsupported-CRS message must interpolate the offending value.
