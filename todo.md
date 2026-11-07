@@ -509,7 +509,9 @@ the same logic, not real GDAL/QGIS/libtiff output; add third-party fixtures.
         Conus Albers, checked against PROJ on 231 pairs (worst 0.96 mm).
       - Open: more EPSG registry entries, BNG (needs the OSTN15 grid), datum shifts.
 - [x] Karney geodesics (fixes Vincenty antipodal failure) — inverse and direct, checked
-      against GeographicLib; not done: geodesic area (`S12`) and line sampling
+      against GeographicLib. Polygon area and perimeter (`geodesic::polygon_measure`) are done,
+      checked against GeographicLib's PolygonArea on 225 polygons (relative area error 7e-9
+      worst case); not done: line sampling
 - [ ] I/O: ISO WKB Z/M + EWKB; WKT `EMPTY`/`Z`/`SRID=`; bare GeoJSON Feature/Geometry,
       `properties: null`; shapefile `.prj`/`.cpg`/Z types + writer; GeoPackage
       WITHOUT ROWID + R-tree tables

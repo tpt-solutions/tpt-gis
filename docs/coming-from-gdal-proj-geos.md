@@ -30,7 +30,7 @@ about the code in this repository, not a release.
 | Datum shifts (Helmert) | `+towgs84` | `datum::transform_geocentric` | ✅ 7-parameter Helmert only |
 | General `transform(from, to)` | `Transformer` | — | ❌ no registry or pipeline |
 | EPSG registry | `EPSG:xxxx` | `epsg::lookup` | 🟡 WGS84, Web Mercator, UTM zones; the rest of EPSG is not included |
-| Geodesic distance | `Geod` (Karney) | `geodesic::inverse` / `direct` | 🟡 Karney's algorithm (GeographicLib port): distance and azimuths; no area or line sampling |
+| Geodesic distance | `Geod` (Karney) | `geodesic::inverse` / `direct` | 🟡 Karney's algorithm (GeographicLib port): distance, azimuths, polygon perimeter and area (`polygon_measure`); no line sampling |
 | Local planar approximation | — | `projection::local_tangent_plane` | ✅ |
 
 ## Geometry predicates and operations (GEOS)

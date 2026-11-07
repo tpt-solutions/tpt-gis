@@ -5,6 +5,10 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+- `geodesic::polygon_measure`: perimeter and enclosed area of a polygon on the ellipsoid, as
+  GeographicLib's `PolygonArea` computes them (antimeridian and pole handling included).
+
 ### Changed
 - `geodesic` now uses Karney's algorithm (a port of GeographicLib, MIT/X11) in place of
   Vincenty's iteration. `inverse` and `direct` keep their signatures. Nearly antipodal

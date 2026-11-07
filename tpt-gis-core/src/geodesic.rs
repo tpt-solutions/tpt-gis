@@ -12,7 +12,7 @@
 //! Angles in the solver are in degrees where the reference uses degrees (latitudes,
 //! longitudes, azimuths in the `*d` helpers) and radians elsewhere, as in the reference.
 
-use libm::{atan2, copysign, cos, fabs, fmod, hypot, remainder, rint, sin, sqrt};
+use libm::{atan, atan2, atanh, copysign, cos, fabs, fmod, hypot, remainder, rint, sin, sqrt};
 
 use crate::{Ellipsoid, GeoPoint};
 
@@ -103,6 +103,16 @@ const C3_COEFF: [f64; 45] = [
     3.0, 128.0, 2.0, 5.0, 128.0, -1.0, 3.0, 3.0, 64.0, -1.0, 0.0, 1.0, 8.0, -1.0, 1.0, 4.0, 5.0,
     256.0, 1.0, 3.0, 128.0, -3.0, -2.0, 3.0, 64.0, 1.0, -3.0, 2.0, 32.0, 7.0, 512.0, -10.0, 9.0,
     384.0, 5.0, -9.0, 5.0, 192.0, 7.0, 512.0, -14.0, 7.0, 512.0, 21.0, 2560.0,
+];
+
+const C4_COEFF: [f64; 77] = [
+    97.0, 15015.0, 1088.0, 156.0, 45045.0, -224.0, -4784.0, 1573.0, 45045.0, -10656.0, 14144.0,
+    -4576.0, -858.0, 45045.0, 64.0, 624.0, -4576.0, 6864.0, -3003.0, 15015.0, 100.0, 208.0, 572.0,
+    3432.0, -12012.0, 30030.0, 45045.0, 1.0, 9009.0, -2944.0, 468.0, 135135.0, 5792.0, 1040.0,
+    -1287.0, 135135.0, 5952.0, -11648.0, 9152.0, -2574.0, 135135.0, -64.0, -624.0, 4576.0, -6864.0,
+    3003.0, 135135.0, 8.0, 10725.0, 1856.0, -936.0, 225225.0, -8448.0, 4992.0, -1144.0, 225225.0,
+    -1440.0, 4160.0, -4576.0, 1716.0, 225225.0, -136.0, 63063.0, 1024.0, -208.0, 105105.0, 3584.0,
+    -3328.0, 1144.0, 315315.0, -128.0, 135135.0, -2560.0, 832.0, 405405.0, 128.0, 99099.0,
 ];
 
 // ----------------------------------------------------------------------------
@@ -304,12 +314,25 @@ struct Karney {
     a: f64,
     f: f64,
     f1: f64,
+    e2: f64,
     ep2: f64,
     n: f64,
     b: f64,
+    c2: f64,
     etol2: f64,
     a3x: [f64; ORDER],
     c3x: [f64; 15],
+    c4x: [f64; 21],
+}
+
+/// The solution of the inverse problem, before the public functions shape it.
+struct InverseSolution {
+    distance_m: f64,
+    area_m2: f64,
+    salp1: f64,
+    calp1: f64,
+    salp2: f64,
+    calp2: f64,
 }
 
 /// The starting point of the inverse iteration.
@@ -333,6 +356,7 @@ struct Lambda {
     ssig2: f64,
     csig2: f64,
     eps: f64,
+    domg12: f64,
     dlam12: f64,
 }
 
@@ -349,7 +373,43 @@ impl Karney {
         let ep2 = e2 / sq(f1);
         let n = f / (2.0 - f);
         let etol2 = 0.1 * tol2() / sqrt(fmax(0.001, fabs(f)) * fmin(1.0, 1.0 - f / 2.0) / 2.0);
-        Ok(Karney { a, f, f1, ep2, n, b, etol2, a3x: a3_coeffs(n), c3x: c3_coeffs(n) })
+        // The authalic radius squared, c² = (a² + b² atanh(e)/e) / 2 (or its e² < 0 form).
+        let ratio = if e2 == 0.0 {
+            1.0
+        } else if e2 > 0.0 {
+            atanh(sqrt(e2)) / sqrt(fabs(e2))
+        } else {
+            atan(sqrt(-e2)) / sqrt(fabs(e2))
+        };
+        let c2 = (sq(a) + sq(b) * ratio) / 2.0;
+        Ok(Karney {
+            a,
+            f,
+            f1,
+            e2,
+            ep2,
+            n,
+            b,
+            c2,
+            etol2,
+            a3x: a3_coeffs(n),
+            c3x: c3_coeffs(n),
+            c4x: c4_coeffs(n),
+        })
+    }
+
+    /// The `C4` series coefficients `c[0..6]` at `eps`.
+    fn c4f(&self, eps: f64) -> [f64; ORDER] {
+        let mut c = [0.0; ORDER];
+        let mut mult = 1.0;
+        let mut o = 0;
+        for (l, slot) in c.iter_mut().enumerate() {
+            let m = ORDER - l - 1;
+            *slot = mult * polyval(m, &self.c4x, o, eps);
+            o += m + 1;
+            mult *= eps;
+        }
+        c
     }
 
     fn a3f(&self, eps: f64) -> f64 {
@@ -583,7 +643,7 @@ impl Karney {
         } else {
             f64::NAN
         };
-        Lambda { lam12, salp2, calp2, sig12, ssig1, csig1, ssig2, csig2, eps, dlam12 }
+        Lambda { lam12, salp2, calp2, sig12, ssig1, csig1, ssig2, csig2, eps, domg12, dlam12 }
     }
 
     /// The inverse problem: `(s12, salp1, calp1, salp2, calp2)`, where the sines and cosines
@@ -594,7 +654,7 @@ impl Karney {
         lon1: f64,
         lat2: f64,
         lon2: f64,
-    ) -> Result<(f64, f64, f64, f64, f64), GeodesicError> {
+    ) -> Result<InverseSolution, GeodesicError> {
         let (lon12_raw, lon12s_raw) = ang_diff(lon1, lon2);
         let mut lonsign = copysign(1.0, lon12_raw);
         let lon12 = lonsign * lon12_raw;
@@ -636,6 +696,8 @@ impl Karney {
 
         let mut meridian = lat1 == -90.0 || slam12 == 0.0;
         let mut s12x = 0.0;
+        // sin and cos of the longitude difference on the auxiliary sphere, when known.
+        let mut omg: Option<(f64, f64)> = None;
         let (mut salp1, mut calp1, mut salp2, mut calp2) = (0.0, 0.0, 0.0, 0.0);
         if meridian {
             calp1 = clam12;
@@ -667,6 +729,8 @@ impl Karney {
             salp1 = 1.0;
             salp2 = 1.0;
             s12x = self.a * lam12;
+            let omg12 = lam12 / self.f1;
+            omg = Some((sin(omg12), cos(omg12)));
         } else if !meridian {
             let start =
                 self.inverse_start(sbet1, cbet1, dn1, sbet2, cbet2, dn2, lam12, slam12, clam12);
@@ -678,6 +742,8 @@ impl Karney {
                 // Really short, or near-antipodal line handled by the starting guess.
                 let dnm = start.dnm;
                 s12x = start.sig12 * self.b * dnm;
+                let omg12 = lam12 / (self.f1 * dnm);
+                omg = Some((sin(omg12), cos(omg12)));
             } else {
                 let mut numit: u32 = 0;
                 let mut tripn = false;
@@ -751,7 +817,62 @@ impl Karney {
                 s12x = s12 * self.b;
                 salp2 = last.salp2;
                 calp2 = last.calp2;
+                let (sdomg, cdomg) = (sin(last.domg12), cos(last.domg12));
+                omg = Some((slam12 * cdomg - clam12 * sdomg, clam12 * cdomg + slam12 * sdomg));
             }
+        }
+
+        // The area term, before the swaps are undone (GeographicLib's `S12`).
+        let salp0 = salp1 * cbet1;
+        let calp0 = hypot(calp1, salp1 * sbet1);
+        let mut s12area = 0.0;
+        if calp0 != 0.0 && salp0 != 0.0 {
+            let (ssig1, csig1) = norm2(sbet1, calp1 * cbet1);
+            let (ssig2, csig2) = norm2(sbet2, calp2 * cbet2);
+            let k2 = sq(calp0) * self.ep2;
+            let eps = k2 / (2.0 * (1.0 + sqrt(1.0 + k2)) + k2);
+            let a4 = sq(self.a) * calp0 * salp0 * self.e2;
+            let c4a = self.c4f(eps);
+            let b41 = sin_cos_series(false, ssig1, csig1, &c4a);
+            let b42 = sin_cos_series(false, ssig2, csig2, &c4a);
+            s12area = a4 * (b42 - b41);
+        }
+        if !meridian {
+            let (somg12, comg12) = omg.unwrap_or((0.0, 1.0));
+            // The reference's literal threshold, kept as written so results match it exactly.
+            #[allow(clippy::approx_constant)]
+            let alp12 = if comg12 > -0.7071 && sbet2 - sbet1 < 1.75 {
+                let domg12 = 1.0 + comg12;
+                let dbet1 = 1.0 + cbet1;
+                let dbet2 = 1.0 + cbet2;
+                2.0 * atan2(
+                    somg12 * (sbet1 * dbet2 + sbet2 * dbet1),
+                    domg12 * (sbet1 * sbet2 + dbet1 * dbet2),
+                )
+            } else {
+                let mut salp12 = salp2 * calp1 - calp2 * salp1;
+                let mut calp12 = calp2 * calp1 + salp2 * salp1;
+                if salp12 == 0.0 && calp12 < 0.0 {
+                    salp12 = tiny() * calp1;
+                    calp12 = -1.0;
+                }
+                atan2(salp12, calp12)
+            };
+            s12area += self.c2 * alp12;
+            s12area *= swapp * lonsign * latsign;
+        } else {
+            // Along a meridian the area is the sphere's term alone.
+            let alp12 = {
+                let mut salp12 = salp2 * calp1 - calp2 * salp1;
+                let mut calp12 = calp2 * calp1 + salp2 * salp1;
+                if salp12 == 0.0 && calp12 < 0.0 {
+                    salp12 = tiny() * calp1;
+                    calp12 = -1.0;
+                }
+                atan2(salp12, calp12)
+            };
+            s12area += self.c2 * alp12;
+            s12area *= swapp * lonsign * latsign;
         }
 
         // Undo the swaps and signs applied to the input.
@@ -764,7 +885,7 @@ impl Karney {
         calp1 *= swapp * latsign;
         salp2 *= swapp * lonsign;
         calp2 *= swapp * latsign;
-        Ok((s12, salp1, calp1, salp2, calp2))
+        Ok(InverseSolution { distance_m: s12, area_m2: 0.0 + s12area, salp1, calp1, salp2, calp2 })
     }
 
     /// The direct problem: the destination `(lat2, lon2)` and the azimuth there `azi2`, for
@@ -903,6 +1024,18 @@ fn a3_coeffs(n: f64) -> [f64; ORDER] {
     out
 }
 
+/// The `C4` polynomial coefficients in `eps`, for `l = 0..ORDER`.
+fn c4_coeffs(n: f64) -> [f64; 21] {
+    let mut out = [0.0; 21];
+    let mut o = 0;
+    for (k, j) in (0..ORDER).flat_map(|l| (l..ORDER).rev()).enumerate() {
+        let m = ORDER - j - 1;
+        out[k] = polyval(m, &C4_COEFF, o, n) / C4_COEFF[o + m + 1];
+        o += m + 2;
+    }
+    out
+}
+
 /// The `C3` polynomial coefficients in `eps`, for `l = 1..ORDER`.
 fn c3_coeffs(n: f64) -> [f64; 15] {
     let mut out = [0.0; 15];
@@ -945,13 +1078,111 @@ pub fn inverse(
         return Err(GeodesicError::InvalidInput);
     }
     let karney = Karney::new(ellipsoid)?;
-    let (distance_m, salp1, calp1, salp2, calp2) =
-        karney.inverse(p1.lat_deg, p1.lon_deg, p2.lat_deg, p2.lon_deg)?;
+    let sol = karney.inverse(p1.lat_deg, p1.lon_deg, p2.lat_deg, p2.lon_deg)?;
     Ok(InverseResult {
-        distance_m,
-        initial_bearing_deg: normalize_bearing_deg(atan2d(salp1, calp1)),
-        final_bearing_deg: normalize_bearing_deg(atan2d(salp2, calp2)),
+        distance_m: sol.distance_m,
+        initial_bearing_deg: normalize_bearing_deg(atan2d(sol.salp1, sol.calp1)),
+        final_bearing_deg: normalize_bearing_deg(atan2d(sol.salp2, sol.calp2)),
     })
+}
+
+/// The perimeter and enclosed area of a polygon on the ellipsoid.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PolygonMeasure {
+    /// The length of the boundary, including the closing edge, in meters.
+    pub perimeter_m: f64,
+    /// The enclosed area, in square meters. Counter-clockwise traversal (seen from above)
+    /// gives a positive area; a clockwise polygon gives a negative one. A polygon larger than
+    /// a hemisphere is reported as the area of its complement, as GeographicLib does.
+    pub area_m2: f64,
+}
+
+/// The longitude-crossing count of one edge, as GeographicLib's `PolygonArea` counts it.
+fn transit(lon1: f64, lon2: f64) -> i32 {
+    let (lon12, _) = ang_diff(lon1, lon2);
+    let lon1 = ang_normalize(lon1);
+    let lon2 = ang_normalize(lon2);
+    if lon12 > 0.0 && ((lon1 < 0.0 && 0.0 <= lon2) || (lon1 > 0.0 && lon2 == 0.0)) {
+        1
+    } else if lon12 < 0.0 && lon2 < 0.0 && 0.0 <= lon1 {
+        -1
+    } else {
+        0
+    }
+}
+
+/// Measures a polygon given by its vertices in order, as `(latitude, longitude)` degrees.
+/// The polygon closes from the last vertex back to the first.
+///
+/// This follows GeographicLib's `PolygonArea`: the per-edge area terms are summed, and the
+/// total is reduced modulo the sphere's area, with the wrap-around counted from the
+/// antimeridian crossings.
+///
+/// # Errors
+/// Returns [`GeodesicError::InvalidInput`] for a non-finite coordinate or a latitude outside
+/// `[-90, 90]`, and [`GeodesicError::ConvergenceFailure`] if an edge fails to solve.
+pub fn polygon_measure(
+    ellipsoid: &Ellipsoid,
+    vertices: &[GeoPoint],
+) -> Result<PolygonMeasure, GeodesicError> {
+    if !vertices.iter().all(|&p| valid_point(p)) {
+        return Err(GeodesicError::InvalidInput);
+    }
+    if vertices.len() < 2 {
+        return Ok(PolygonMeasure { perimeter_m: 0.0, area_m2: 0.0 });
+    }
+    let karney = Karney::new(ellipsoid)?;
+    let area0 = 4.0 * core::f64::consts::PI * karney.c2;
+    let first = vertices[0];
+    let mut perimeter = 0.0;
+    let mut area_sum = KahanSum::default();
+    let mut crossings = 0i32;
+    let edges = vertices.iter().zip(vertices.iter().skip(1).chain(core::iter::once(&first)));
+    for (from, to) in edges {
+        let sol = karney.inverse(from.lat_deg, from.lon_deg, to.lat_deg, to.lon_deg)?;
+        perimeter += sol.distance_m;
+        area_sum.add(sol.area_m2);
+        crossings += transit(from.lon_deg, to.lon_deg);
+    }
+    Ok(PolygonMeasure {
+        perimeter_m: perimeter,
+        area_m2: area_reduce(area_sum.value(), area0, crossings),
+    })
+}
+
+/// A compensated sum, so that many small edge terms add accurately.
+#[derive(Default)]
+struct KahanSum {
+    sum: f64,
+    compensation: f64,
+}
+
+impl KahanSum {
+    fn add(&mut self, value: f64) {
+        let y = value - self.compensation;
+        let t = self.sum + y;
+        self.compensation = (t - self.sum) - y;
+        self.sum = t;
+    }
+
+    fn value(&self) -> f64 {
+        self.sum
+    }
+}
+
+/// GeographicLib's `_areareduceB` for a counter-clockwise, signed result.
+fn area_reduce(area_sum: f64, area0: f64, crossings: i32) -> f64 {
+    let mut area = remainder(area_sum, area0);
+    if crossings & 1 != 0 {
+        area += (if area < 0.0 { 1.0 } else { -1.0 }) * area0 / 2.0;
+    }
+    area = -area;
+    if area > area0 / 2.0 {
+        area -= area0;
+    } else if area <= -area0 / 2.0 {
+        area += area0;
+    }
+    0.0 + area
 }
 
 /// Solves the geodesic direct problem: given a start point, initial bearing, and
@@ -1153,5 +1384,44 @@ mod tests {
         let r = inverse(&Ellipsoid::WGS84, GeoPoint::new(0.5, 0.0), GeoPoint::new(-0.5, 179.7))
             .unwrap();
         assert!((r.distance_m - 19_995_624.889_961).fabs() < 1e-3, "{}", r.distance_m);
+    }
+
+    /// GeographicLib's `PolygonArea` results (see `tests/fixtures/geographiclib_polygon.csv`):
+    /// 225 polygons, including antimeridian crossings, polar polygons, clockwise rings, and
+    /// self-intersecting ones.
+    #[test]
+    fn polygon_area_matches_geographiclib() {
+        let text = include_str!("../tests/fixtures/geographiclib_polygon.csv");
+        let e = &Ellipsoid::WGS84;
+        let (mut worst_perimeter, mut worst_area, mut checked) = (0.0_f64, 0.0_f64, 0);
+        let mut worst_row = "";
+        for line in text.lines().filter(|l| !l.starts_with('#') && !l.trim().is_empty()) {
+            // Fields: tag, vertex count, the vertices as lat/lon pairs, perimeter, area.
+            let mut fields = line.split(';');
+            let _tag = fields.next();
+            let n: usize = fields.next().unwrap().parse().unwrap();
+            let mut vertices = [GeoPoint::new(0.0, 0.0); 16];
+            for vertex in vertices.iter_mut().take(n) {
+                let lat: f64 = fields.next().unwrap().parse().unwrap();
+                let lon: f64 = fields.next().unwrap().parse().unwrap();
+                *vertex = GeoPoint::new(lat, lon);
+            }
+            let want_perimeter: f64 = fields.next().unwrap().parse().unwrap();
+            let want_area: f64 = fields.next().unwrap().parse().unwrap();
+            let got = polygon_measure(e, &vertices[..n]).unwrap();
+            worst_perimeter = worst_perimeter.max((got.perimeter_m - want_perimeter).abs());
+            // Relative to the area, with a 1 m² floor for the tiny polygons.
+            let rel = (got.area_m2 - want_area).abs() / want_area.abs().max(1.0);
+            if rel > worst_area {
+                worst_row = line;
+            }
+            worst_area = worst_area.max(rel);
+            checked += 1;
+        }
+        assert!(checked >= 225, "only {checked} polygons");
+        assert!(worst_perimeter < 1e-3, "worst perimeter error {worst_perimeter} m");
+        // Measured worst case: 7.3e-9, on a small clockwise polygon. Its edge terms are of the
+        // order of the sphere's area, so the sum rounds at about 1 m² there.
+        assert!(worst_area < 1e-8, "worst relative area error {worst_area} on {worst_row}");
     }
 }
