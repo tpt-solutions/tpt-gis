@@ -9,6 +9,10 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - GeoPackage R-tree spatial index: `WriteOptions::spatial_index` writes the
   `gpkg_rtree_index` extension (rtree table, shadow tables, triggers, `gpkg_extensions`
   row). `WriteOptions` has a new field, so struct literals need `spatial_index`.
+- GeoPackage reader: feature and metadata tables created `WITHOUT ROWID` are read from
+  their primary-key index b-tree, including interior index cells and overflow pages. Their
+  integer primary key is an ordinary column, not a rowid alias. Checked against a file
+  written by Python's sqlite3. The writer still produces rowid tables.
 
 ### Fixed
 - GeoPackage writer: when an `INTEGER PRIMARY KEY` id column was used, the record omitted

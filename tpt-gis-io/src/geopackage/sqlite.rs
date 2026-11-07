@@ -434,16 +434,21 @@ fn serial_for_value(value: &CellValue) -> (u64, Vec<u8>) {
     }
 }
 
-/// Reads the full payload of a leaf-table cell, following overflow pages if the
-/// payload does not fit inline.
+/// Reads the full payload of a table or index cell, following overflow pages if the
+/// payload does not fit inline. `is_index` selects the index b-tree's inline limit, which
+/// is larger than the table b-tree's.
 fn read_cell_payload(
     db: &[u8],
     info: &DbInfo,
-    _cell_page_start: usize,
     payload_start: usize,
     payload_len: usize,
+    is_index: bool,
 ) -> Result<Vec<u8>, SqliteError> {
-    let max_local = info.usable - 35; // leaf-table max inline payload
+    let max_local = if is_index {
+        ((info.usable - 12) * 64 / 255) - 23 // index b-tree max inline payload
+    } else {
+        info.usable - 35 // leaf-table max inline payload
+    };
     if payload_len <= max_local {
         return checked_slice(db, payload_start, payload_len).map(<[u8]>::to_vec);
     }
@@ -520,7 +525,7 @@ fn read_btree(
         } else {
             let (payload_len, p1) = read_varint(db, cell_offset)?;
             let (rowid, p2) = read_varint(db, p1)?;
-            let payload = read_cell_payload(db, info, page_start, p2, payload_len as usize)?;
+            let payload = read_cell_payload(db, info, p2, payload_len as usize, false)?;
             let values = read_record(&payload, columns, rowid as i64)?;
             rows.push((rowid as i64, values));
         }
@@ -548,6 +553,78 @@ pub fn read_table(
     let mut rows = Vec::new();
     read_btree(db, &info, rootpage, columns, &mut rows, 0)?;
     Ok(rows)
+}
+
+/// Reads every row of a `WITHOUT ROWID` table, whose rows live in an index b-tree keyed by
+/// the primary key.
+///
+/// Each record holds all of the table's columns in declaration order. There is no rowid, and
+/// no `INTEGER PRIMARY KEY` alias: callers should clear `is_rowid_alias` on `columns`.
+/// Interior index cells carry records too, so they are emitted between their subtrees.
+///
+/// # Errors
+/// Returns [`SqliteError`] on a malformed header, truncated record, or unsupported page type.
+pub fn read_index_table(
+    db: &[u8],
+    rootpage: u32,
+    columns: &[Column],
+) -> Result<Vec<Vec<CellValue>>, SqliteError> {
+    let info = parse_db_header(db)?;
+    let mut rows = Vec::new();
+    read_index_btree(db, &info, rootpage, columns, &mut rows, 0)?;
+    Ok(rows)
+}
+
+/// Recursively walks an index b-tree in key order. Index interior cells hold a full record,
+/// which is a row of the table, so it is read between the left subtree and the next one.
+fn read_index_btree(
+    db: &[u8],
+    info: &DbInfo,
+    page_number: u32,
+    columns: &[Column],
+    rows: &mut Vec<Vec<CellValue>>,
+    depth: usize,
+) -> Result<(), SqliteError> {
+    if depth > MAX_BTREE_DEPTH {
+        return Err(SqliteError::new(SqliteErrorKind::BTreeTooDeep));
+    }
+    let page_start = (usize::try_from(page_number)
+        .map_err(|_| SqliteError::new(SqliteErrorKind::OffsetOverflow))?
+        .checked_sub(1)
+        .ok_or(SqliteError::new(SqliteErrorKind::InvalidPageNumber))?)
+        * info.page_size;
+    let header_offset = page_start + if page_number == 1 { 100 } else { 0 };
+    let page_type =
+        *db.get(header_offset).ok_or(SqliteError::new(SqliteErrorKind::UnexpectedEndOfInput))?;
+    let is_interior = page_type == 0x02;
+    let is_leaf = page_type == 0x0a;
+    if !is_interior && !is_leaf {
+        return Err(SqliteError::new(SqliteErrorKind::UnsupportedPageType(page_type)));
+    }
+
+    let num_cells = usize::from(be_u16(db, header_offset + 3)?);
+    let ptr_array_start = header_offset + if is_interior { 12 } else { 8 };
+
+    for i in 0..num_cells {
+        let ptr = usize::from(be_u16(db, ptr_array_start + i * 2)?);
+        let cell_offset = page_start + ptr;
+        let payload_offset = if is_interior {
+            let left_child = be_u32(db, cell_offset)?;
+            read_index_btree(db, info, left_child, columns, rows, depth + 1)?;
+            cell_offset + 4
+        } else {
+            cell_offset
+        };
+        let (payload_len, p1) = read_varint(db, payload_offset)?;
+        let payload = read_cell_payload(db, info, p1, payload_len as usize, true)?;
+        rows.push(read_record(&payload, columns, 0)?);
+    }
+
+    if is_interior {
+        let right_child = be_u32(db, header_offset + 8)?;
+        read_index_btree(db, info, right_child, columns, rows, depth + 1)?;
+    }
+    Ok(())
 }
 
 /// Builds a single leaf-table b-tree page containing `cells`.

@@ -533,8 +533,10 @@ the same logic, not real GDAL/QGIS/libtiff output; add third-party fixtures.
         `rtreecheck` (after writing and after every trigger path, through Python `ST_*`
         functions), and GDAL reads the file and gives the same bounding-box count.
       - Done: `tptgis convert --spatial-index` writes the index for GeoPackage output.
-      - Open: WKT `EMPTY` (the model has no empty geometries), GeoPackage WITHOUT ROWID
-        tables.
+      - Done: reading GeoPackage `WITHOUT ROWID` tables (index b-tree walk, checked against a
+        sqlite3-written file). The writer still emits rowid tables, which the spec does not
+        require.
+      - Open: WKT `EMPTY` (the model has no empty geometries).
 - [x] Raster: overview IFDs and COG writer (`geotiff::write_cog`: tiled, multi-band,
       deflate, chained overviews from 2×2 means that skip nodata). Checked with GDAL
       (rasterio): tiling, overview levels, georeferencing, nodata, and every overview value.

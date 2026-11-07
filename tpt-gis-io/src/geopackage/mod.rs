@@ -149,9 +149,8 @@ pub fn read_gpkg(bytes: &[u8]) -> Result<Vec<Feature>, GeoPackageError> {
         let Some((rootpage, sql)) = tables.get(&table_name) else {
             continue;
         };
-        let columns = parse_create_table(sql);
-        let rows = sqlite::read_table(bytes, *rootpage, &columns)?;
-        for (_rid, vals) in rows {
+        let (columns, rows) = table_rows(bytes, *rootpage, sql)?;
+        for vals in rows {
             let mut properties = Map::new();
             let mut geometry: Option<Geometry> = None;
             for (col, val) in columns.iter().zip(vals) {
@@ -472,21 +471,55 @@ fn read_geometry_columns(
     let Some((rootpage, sql)) = tables.get("gpkg_geometry_columns") else {
         return Ok(Vec::new());
     };
-    let columns = parse_create_table(sql);
+    let (columns, rows) = table_rows(bytes, *rootpage, sql)?;
     let table_name_idx = columns.iter().position(|c| c.name.eq_ignore_ascii_case("table_name"));
     let column_name_idx = columns.iter().position(|c| c.name.eq_ignore_ascii_case("column_name"));
     let (tn, cn) = match (table_name_idx, column_name_idx) {
         (Some(a), Some(b)) => (a, b),
         _ => return Ok(Vec::new()),
     };
-    let rows = sqlite::read_table(bytes, *rootpage, &columns)?;
     let mut out = Vec::new();
-    for (_rid, vals) in rows {
+    for vals in rows {
         if let (CellValue::Text(t), CellValue::Text(c)) = (&vals[tn], &vals[cn]) {
             out.push((t.clone(), c.clone()));
         }
     }
     Ok(out)
+}
+
+/// Reads every row of a table given its root page and `CREATE TABLE` text, returning the
+/// parsed columns and the row values aligned to them. Rowid tables are read by rowid;
+/// `WITHOUT ROWID` tables are read from their primary-key index.
+fn table_rows(
+    bytes: &[u8],
+    rootpage: u32,
+    sql: &str,
+) -> Result<(Vec<sqlite::Column>, Vec<Vec<CellValue>>), GeoPackageError> {
+    let mut columns = parse_create_table(sql);
+    if is_without_rowid(sql) {
+        // A primary key in a WITHOUT ROWID table is an ordinary column, not a rowid alias.
+        for column in &mut columns {
+            column.is_rowid_alias = false;
+        }
+        let rows = sqlite::read_index_table(bytes, rootpage, &columns)?;
+        return Ok((columns, rows));
+    }
+    let rows = sqlite::read_table(bytes, rootpage, &columns)?
+        .into_iter()
+        .map(|(_rowid, values)| values)
+        .collect();
+    Ok((columns, rows))
+}
+
+/// Whether a `CREATE TABLE` statement ends in the `WITHOUT ROWID` table option.
+fn is_without_rowid(sql: &str) -> bool {
+    let upper = sql.to_ascii_uppercase();
+    // The table options follow the closing parenthesis of the column list.
+    let Some(close) = upper.rfind(')') else {
+        return false;
+    };
+    let options = upper[close + 1..].split_whitespace().collect::<Vec<_>>().join(" ");
+    options.trim_end_matches(';').trim() == "WITHOUT ROWID"
 }
 
 /// Parses a `CREATE TABLE` statement into its column list, skipping table-level
