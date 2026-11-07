@@ -2,10 +2,8 @@
 //! needs of GeoPackage.
 //!
 //! This is **not** a database engine: it does not run SQL, manage transactions, or
-//! build indexes. It knows just enough of the on-disk b-tree format to read the
-//! records of table leaf (and simple interior) b-trees and to write small tables
-//! that consist of a single leaf page each. That is exactly what GeoPackage
-//! feature tables and metadata tables look like at the sizes this crate targets.
+//! build indexes. It knows enough of the on-disk b-tree format to read and write the
+//! table b-trees that GeoPackage feature and metadata tables use.
 //!
 //! # Read support
 //! - 100-byte database header (magic, page size, reserved bytes, text encoding).
@@ -16,10 +14,10 @@
 //!   rather than from the record body.
 //!
 //! # Write support (intentionally limited)
-//! - One leaf page per table, no interior splitting, no freelist, no overflow pages.
-//!   Each record (including its geometry BLOB) must therefore fit inline in a single
-//!   page. This is fine for the modest feature sets GeoPackage round-trips here, but
-//!   it is **not** a general-purpose SQLite writer.
+//! - Table b-trees with one level of interior pages (about 500 leaves), records
+//!   spilled to overflow pages when they exceed a leaf cell, and no freelist.
+//! - Tables needing a second interior level are rejected with `WriteTooLarge`.
+//! - Writing is not a general-purpose SQLite writer: no indexes, no transactions.
 //!
 //! Only UTF-8 text encoding is supported (which is what the GeoPackage spec
 //! mandates), so reading a UTF-16 database returns [`SqliteError::UnsupportedTextEncoding`].
@@ -594,6 +592,180 @@ pub fn build_leaf_page(
     page
 }
 
+/// The pages of one table b-tree, ready to write at their page numbers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TablePages {
+    /// `(page number, page bytes)`, root first.
+    pub pages: Vec<(u32, Vec<u8>)>,
+    /// The highest page number used by this tree.
+    pub last_page: u32,
+}
+
+/// How many payload bytes a table-leaf cell stores inline, following SQLite's rule
+/// (`maxLocal = usable - 35`, `minLocal = (usable - 12) * 32 / 255 - 23`). The reader
+/// applies the same rule when it follows an overflow chain.
+fn inline_payload_len(payload: usize, usable: usize) -> usize {
+    let max_local = usable - 35;
+    if payload <= max_local {
+        return payload;
+    }
+    let min_local = (usable - 12) * 32 / 255 - 23;
+    let k = min_local + (payload - min_local) % (usable - 4);
+    if k <= max_local {
+        k
+    } else {
+        min_local
+    }
+}
+
+/// Builds the b-tree for a table rooted at page `root`. `cells` are `(rowid, record)`
+/// pairs sorted by rowid.
+///
+/// Cells are packed into leaves; more than one leaf gets an interior root at `root`.
+/// Records larger than a leaf cell spill into overflow pages. A single interior level
+/// holds up to roughly 500 leaves; a larger table is an error, as is a single record
+/// that cannot be placed.
+///
+/// # Errors
+/// Returns a message if the rows need more than one interior level.
+pub fn build_table_tree(
+    page_size: usize,
+    root: u32,
+    cells: &[(i64, Vec<u8>)],
+) -> Result<TablePages, &'static str> {
+    let usable = page_size;
+    let leaf_header = 8;
+    let interior_header = 12;
+
+    // Inline size of each cell, and where its overflow starts (if any).
+    struct Shape {
+        local: usize,
+        overflow: bool,
+    }
+    let shapes: Vec<Shape> = cells
+        .iter()
+        .map(|(_, record)| {
+            let local = inline_payload_len(record.len(), usable);
+            Shape { local, overflow: local < record.len() }
+        })
+        .collect();
+    let cell_size = |i: usize| -> usize {
+        let (rowid, record) = &cells[i];
+        let mut scratch = Vec::new();
+        write_varint(&mut scratch, record.len() as u64);
+        write_varint(&mut scratch, *rowid as u64);
+        scratch.len() + shapes[i].local + if shapes[i].overflow { 4 } else { 0 }
+    };
+
+    // Greedy leaf packing.
+    let mut leaves: Vec<Vec<usize>> = vec![Vec::new()];
+    let mut used = leaf_header;
+    for i in 0..cells.len() {
+        let cost = cell_size(i) + 2;
+        if used + cost > usable {
+            leaves.push(Vec::new());
+            used = leaf_header;
+        }
+        leaves.last_mut().expect("at least one leaf").push(i);
+        used += cost;
+    }
+
+    let interior = leaves.len() > 1;
+    let first_leaf = if interior { root + 1 } else { root };
+    let leaf_page = |j: usize| first_leaf + j as u32;
+    let mut next = first_leaf + leaves.len() as u32;
+
+    if interior {
+        // One interior cell per leaf but the last: child pointer plus max rowid key.
+        let mut needed = interior_header;
+        for leaf in &leaves[..leaves.len() - 1] {
+            let key = cells[*leaf.last().expect("non-empty leaf")].0 as u64;
+            let mut scratch = Vec::new();
+            write_varint(&mut scratch, key);
+            needed += 4 + scratch.len() + 2;
+        }
+        if needed > usable {
+            return Err("table needs more than one interior level");
+        }
+    }
+
+    // Overflow page numbers for each overflowing cell, allocated after the leaves.
+    let mut overflow_first = vec![0u32; cells.len()];
+    let mut overflow_pages: Vec<(u32, Vec<u8>)> = Vec::new();
+    for (i, (_, record)) in cells.iter().enumerate() {
+        if !shapes[i].overflow {
+            continue;
+        }
+        let rest = &record[shapes[i].local..];
+        let chunk = usable - 4;
+        let count = rest.len().div_ceil(chunk) as u32;
+        overflow_first[i] = next;
+        for k in 0..count {
+            let page_no = next + k;
+            let next_ptr = if k + 1 < count { page_no + 1 } else { 0 };
+            let start = k as usize * chunk;
+            let end = (start + chunk).min(rest.len());
+            let mut page = vec![0u8; page_size];
+            page[0..4].copy_from_slice(&next_ptr.to_be_bytes());
+            page[4..4 + (end - start)].copy_from_slice(&rest[start..end]);
+            overflow_pages.push((page_no, page));
+        }
+        next += count;
+    }
+
+    // Leaf pages.
+    let mut pages: Vec<(u32, Vec<u8>)> = Vec::new();
+    for (j, leaf) in leaves.iter().enumerate() {
+        let mut page = vec![0u8; page_size];
+        page[0] = 0x0d;
+        let mut content_start = page_size;
+        for (slot, &i) in leaf.iter().enumerate() {
+            let (rowid, record) = &cells[i];
+            let mut cell = Vec::new();
+            write_varint(&mut cell, record.len() as u64);
+            write_varint(&mut cell, *rowid as u64);
+            cell.extend_from_slice(&record[..shapes[i].local]);
+            if shapes[i].overflow {
+                cell.extend_from_slice(&overflow_first[i].to_be_bytes());
+            }
+            content_start -= cell.len();
+            page[content_start..content_start + cell.len()].copy_from_slice(&cell);
+            let ptr = leaf_header + 2 * slot;
+            page[ptr..ptr + 2].copy_from_slice(&(content_start as u16).to_be_bytes());
+        }
+        page[1..3].copy_from_slice(&0u16.to_be_bytes());
+        page[3..5].copy_from_slice(&(leaf.len() as u16).to_be_bytes());
+        page[5..7].copy_from_slice(&(content_start as u16).to_be_bytes());
+        pages.push((leaf_page(j), page));
+    }
+
+    if interior {
+        let mut page = vec![0u8; page_size];
+        page[0] = 0x05;
+        let inner = &leaves[..leaves.len() - 1];
+        let mut content_start = page_size;
+        for (slot, leaf) in inner.iter().enumerate() {
+            let key = cells[*leaf.last().expect("non-empty leaf")].0 as u64;
+            let mut cell = Vec::new();
+            cell.extend_from_slice(&leaf_page(slot).to_be_bytes());
+            write_varint(&mut cell, key);
+            content_start -= cell.len();
+            page[content_start..content_start + cell.len()].copy_from_slice(&cell);
+            let ptr = interior_header + 2 * slot;
+            page[ptr..ptr + 2].copy_from_slice(&(content_start as u16).to_be_bytes());
+        }
+        page[1..3].copy_from_slice(&0u16.to_be_bytes());
+        page[3..5].copy_from_slice(&(inner.len() as u16).to_be_bytes());
+        page[5..7].copy_from_slice(&(content_start as u16).to_be_bytes());
+        page[8..12].copy_from_slice(&leaf_page(leaves.len() - 1).to_be_bytes());
+        pages.insert(0, (root, page));
+    }
+
+    pages.extend(overflow_pages);
+    let last_page = pages.iter().map(|(n, _)| *n).max().unwrap_or(root).max(root);
+    Ok(TablePages { pages, last_page })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -738,5 +910,95 @@ mod tests {
             })
             .collect();
         assert_eq!(vals, vec![1, 2, 3, 4, 5]);
+    }
+}
+
+#[cfg(test)]
+mod tree_tests {
+    use super::*;
+
+    const PAGE: usize = 4096;
+
+    fn columns() -> Vec<Column> {
+        vec![
+            Column { name: "id".into(), is_rowid_alias: false },
+            Column { name: "blob".into(), is_rowid_alias: false },
+        ]
+    }
+
+    /// Assembles a database image: page 1 is an empty table page (the schema
+    /// placeholder), and the given tree pages are written at their page numbers.
+    fn image(pages: &[(u32, Vec<u8>)], last_page: u32) -> Vec<u8> {
+        let mut db = vec![0u8; PAGE * last_page as usize];
+        db[0..16].copy_from_slice(MAGIC);
+        db[16..18].copy_from_slice(&(PAGE as u16).to_be_bytes());
+        db[18] = 1;
+        db[19] = 1;
+        db[28..32].copy_from_slice(&last_page.to_be_bytes());
+        db[56..60].copy_from_slice(&1u32.to_be_bytes());
+        db[100] = 0x0d;
+        db[105..107].copy_from_slice(&0u16.to_be_bytes());
+        for (number, page) in pages {
+            let start = (*number as usize - 1) * PAGE;
+            db[start..start + PAGE].copy_from_slice(page);
+        }
+        db
+    }
+
+    fn rows(n: usize) -> Vec<(i64, Vec<u8>)> {
+        let cols = columns();
+        (0..n)
+            .map(|i| {
+                // Mostly small records, with every 50th record larger than a page.
+                let size = if i % 50 == 49 { 9_000 + i } else { 40 + (i * 7) % 300 };
+                let blob: Vec<u8> = (0..size).map(|k| ((k * 31 + i) % 251) as u8).collect();
+                let values = [CellValue::Integer(i as i64), CellValue::Blob(blob)];
+                (i as i64 + 1, encode_record(&cols, &values))
+            })
+            .collect()
+    }
+
+    fn read_back(db: &[u8], root: u32) -> Vec<(i64, Vec<CellValue>)> {
+        read_table(db, root, &columns()).unwrap()
+    }
+
+    #[test]
+    fn single_leaf_table_round_trips() {
+        let cells = rows(5);
+        let tree = build_table_tree(PAGE, 2, &cells).unwrap();
+        assert_eq!(tree.pages.len(), 1);
+        let db = image(&tree.pages, tree.last_page);
+        let got = read_back(&db, 2);
+        assert_eq!(got.len(), 5);
+        assert_eq!(got[3].1[0], CellValue::Integer(3));
+    }
+
+    /// Hundreds of leaves, interior root, and overflow chains for the big records.
+    #[test]
+    fn multi_leaf_table_with_overflow_round_trips() {
+        let cells = rows(1_000);
+        let tree = build_table_tree(PAGE, 2, &cells).unwrap();
+        assert!(tree.pages.len() > 20, "expected many pages, got {}", tree.pages.len());
+        let db = image(&tree.pages, tree.last_page);
+        let got = read_back(&db, 2);
+        assert_eq!(got.len(), cells.len());
+        for (k, (rowid, values)) in got.iter().enumerate() {
+            assert_eq!(*rowid, k as i64 + 1);
+            assert_eq!(values[0], CellValue::Integer(k as i64));
+            if let CellValue::Blob(b) = &values[1] {
+                let expected_len = if k % 50 == 49 { 9_000 + k } else { 40 + (k * 7) % 300 };
+                assert_eq!(b.len(), expected_len, "row {k}");
+                assert_eq!(b[5], ((5 * 31 + k) % 251) as u8, "row {k}");
+            } else {
+                panic!("row {k} blob missing");
+            }
+        }
+    }
+
+    #[test]
+    fn empty_table_is_a_valid_leaf() {
+        let tree = build_table_tree(PAGE, 2, &[]).unwrap();
+        let db = image(&tree.pages, tree.last_page);
+        assert!(read_back(&db, 2).is_empty());
     }
 }

@@ -12,8 +12,8 @@
 //! `Vec<geojson::Feature>`) and [`write_gpkg`] (features + [`WriteOptions`] → `.gpkg`
 //! bytes). Reading handles leaf and simple interior table b-trees, inline and
 //! overflow payloads, and `INTEGER PRIMARY KEY` rowid aliasing. Writing is
-//! intentionally limited to **single-leaf-page tables** (no interior splitting, no
-//! R-tree spatial index, no tile/attributes extension, no overflow pages) — see the
+//! limited to tables with one interior level (about 500 leaves) and no R-tree spatial
+//! index or tile/attributes extension. Large records use overflow pages. See the
 //! [`sqlite`] module docs for the exact scope.
 //!
 //! # Attribute mapping
@@ -47,8 +47,8 @@ pub enum GeoPackageError {
     NoFeatureTables,
     /// A required GeoPackage metadata table was missing.
     MissingMetadataTable(String),
-    /// A write target was too large for the single-leaf-page writer (a record would
-    /// not fit inline, or the table would overflow a page).
+    /// The table needs more than one interior b-tree level, which the writer does not
+    /// produce.
     WriteTooLarge,
     /// Two features share the same value in the `id` column, so they cannot both be
     /// stored as the table's primary key.
@@ -65,7 +65,7 @@ impl fmt::Display for GeoPackageError {
                 write!(f, "GeoPackage is missing required table {name}")
             }
             GeoPackageError::WriteTooLarge => {
-                write!(f, "GeoPackage write target exceeds the single-leaf-page limit")
+                write!(f, "GeoPackage table needs more than one interior b-tree level")
             }
             GeoPackageError::DuplicateRowId(id) => {
                 write!(f, "two features share primary key {id}")
@@ -169,18 +169,16 @@ pub fn read_gpkg(bytes: &[u8]) -> Result<Vec<Feature>, GeoPackageError> {
 
 /// Writes a set of [`Feature`]s to a minimal valid GeoPackage byte buffer.
 ///
-/// See the module docs for the (intentional) writer limitations: single-leaf-page
-/// tables, no spatial index, no overflow pages. Each record must therefore fit inline
-/// in a 4096-byte page.
+/// Records larger than a leaf cell spill into overflow pages. The table spans leaves
+/// under one interior root, and there is no spatial index.
 ///
 /// # Errors
-/// Returns [`GeoPackageError::WriteTooLarge`] if any record (or the assembled table)
-/// would exceed the single-leaf-page limit, or [`GeoPackageError::MissingMetadataTable`]
-/// if the inputs are inconsistent.
+/// Returns [`GeoPackageError::WriteTooLarge`] if the table needs more than one interior
+/// level, or [`GeoPackageError::DuplicateRowId`] for repeated ids.
 pub fn write_gpkg(features: &[Feature], opts: &WriteOptions) -> Result<Vec<u8>, GeoPackageError> {
     const PAGE_SIZE: usize = 4096;
-    const RESERVED: u8 = 0;
-    const PAGE_COUNT: u32 = 5;
+    /// The feature table's root page; the metadata tables occupy pages 1 to 4.
+    const FEATURE_ROOT: u32 = 5;
 
     // Collect attribute columns (sorted, excluding the optional id column).
     let mut attr_names: BTreeSet<String> = BTreeSet::new();
@@ -231,9 +229,7 @@ pub fn write_gpkg(features: &[Feature], opts: &WriteOptions) -> Result<Vec<u8>, 
             let value = feature.properties.get(name).cloned().unwrap_or(Value::Null);
             vals.push(json_to_cell(&value));
         }
-        let payload = sqlite::encode_record(&stored_columns, &vals);
-        check_fits(PAGE_SIZE, RESERVED, 0, &feature_cells, &payload)?;
-        feature_cells.push((rowid, payload));
+        feature_cells.push((rowid, sqlite::encode_record(&stored_columns, &vals)));
     }
 
     feature_cells.sort_by_key(|(id, _)| *id);
@@ -246,28 +242,35 @@ pub fn write_gpkg(features: &[Feature], opts: &WriteOptions) -> Result<Vec<u8>, 
     let contents_cells = build_meta_cells(&contents_columns(), &contents_row(opts));
     let geomcols_cells = build_meta_cells(&geom_columns_cols(), &geomcols_row(opts));
 
-    // Assemble pages: 1 = master, 2 = srs, 3 = contents, 4 = geomcols, 5 = features.
-    let mut buf = vec![0u8; PAGE_SIZE * usize::try_from(PAGE_COUNT).unwrap()];
+    // Assemble pages: 1 = master, 2 = srs, 3 = contents, 4 = geomcols, then the feature
+    // table's b-tree (root at page 5, leaves and overflow pages after it).
+    let features = sqlite::build_table_tree(PAGE_SIZE, FEATURE_ROOT, &feature_cells)
+        .map_err(|_| GeoPackageError::WriteTooLarge)?;
+    let page_count = features.last_page.max(FEATURE_ROOT);
+    let mut buf = vec![0u8; PAGE_SIZE * usize::try_from(page_count).unwrap()];
 
     let master_cells = build_master_cells(opts, &attr_specs);
     let master_page = sqlite::build_leaf_page(PAGE_SIZE, 100, &master_cells);
     buf[0..PAGE_SIZE].copy_from_slice(&master_page);
 
-    let srs_page = sqlite::build_leaf_page(PAGE_SIZE, 0, &srs_cells);
-    buf[PAGE_SIZE..2 * PAGE_SIZE].copy_from_slice(&srs_page);
+    let meta_pages = [
+        sqlite::build_leaf_page(PAGE_SIZE, 0, &srs_cells),
+        sqlite::build_leaf_page(PAGE_SIZE, 0, &contents_cells),
+        sqlite::build_leaf_page(PAGE_SIZE, 0, &geomcols_cells),
+    ];
+    for (i, page) in meta_pages.iter().enumerate() {
+        let start = (i + 1) * PAGE_SIZE;
+        buf[start..start + PAGE_SIZE].copy_from_slice(page);
+    }
 
-    let contents_page = sqlite::build_leaf_page(PAGE_SIZE, 0, &contents_cells);
-    buf[2 * PAGE_SIZE..3 * PAGE_SIZE].copy_from_slice(&contents_page);
-
-    let geomcols_page = sqlite::build_leaf_page(PAGE_SIZE, 0, &geomcols_cells);
-    buf[3 * PAGE_SIZE..4 * PAGE_SIZE].copy_from_slice(&geomcols_page);
-
-    let feature_page = sqlite::build_leaf_page(PAGE_SIZE, 0, &feature_cells);
-    buf[4 * PAGE_SIZE..5 * PAGE_SIZE].copy_from_slice(&feature_page);
+    for (number, page) in &features.pages {
+        let start = (*number as usize - 1) * PAGE_SIZE;
+        buf[start..start + PAGE_SIZE].copy_from_slice(page);
+    }
 
     // The DB header overwrites the first 100 bytes of page 1 (the b-tree header of the
     // master page begins at offset 100).
-    write_db_header(&mut buf, PAGE_SIZE, PAGE_COUNT);
+    write_db_header(&mut buf, PAGE_SIZE, page_count);
 
     Ok(buf)
 }
@@ -470,25 +473,6 @@ fn meta_columns(defs: &[(&str, &str)]) -> Vec<Column> {
 
 fn build_meta_cells(columns: &[Column], row: &[CellValue]) -> Vec<(i64, Vec<u8>)> {
     vec![(1, sqlite::encode_record(columns, row))]
-}
-
-fn check_fits(
-    page_size: usize,
-    reserved: u8,
-    header_offset: usize,
-    existing: &[(i64, Vec<u8>)],
-    payload: &[u8],
-) -> Result<(), GeoPackageError> {
-    let max_local = page_size - usize::from(reserved) - 35;
-    if payload.len() > max_local {
-        return Err(GeoPackageError::WriteTooLarge);
-    }
-    let used: usize = existing.iter().map(|(_, p)| p.len()).sum();
-    let need = header_offset + 8 + 2 * (existing.len() + 1) + used + payload.len();
-    if need > page_size {
-        return Err(GeoPackageError::WriteTooLarge);
-    }
-    Ok(())
 }
 
 fn srs_columns() -> Vec<Column> {
@@ -771,6 +755,38 @@ mod tests {
     fn duplicate_ids_are_rejected_not_silently_written() {
         let features = vec![feature_with_id(7), feature_with_id(7)];
         assert!(matches!(write_gpkg(&features, &opts()), Err(GeoPackageError::DuplicateRowId(7))));
+    }
+
+    /// Large polygons overflow their leaf cells and many rows need several leaves; both
+    /// must read back intact.
+    #[test]
+    fn large_tables_with_big_geometries_round_trip() {
+        use crate::geometry::Polygon;
+        let ring_for = |i: usize| {
+            let (cx, cy) = ((i % 40) as f64 * 3.0, (i / 40) as f64 * 3.0);
+            let mut ring: Vec<Point> = (0..200)
+                .map(|k| {
+                    let t = core::f64::consts::TAU * k as f64 / 200.0;
+                    Point::new(cx + t.cos(), cy + t.sin())
+                })
+                .collect();
+            ring.push(ring[0]);
+            ring
+        };
+        let features: Vec<Feature> = (0..400)
+            .map(|i| {
+                let mut f = feature_with_id(i as i64);
+                f.geometry = Some(Geometry::Polygon(Polygon { rings: vec![ring_for(i)] }));
+                f
+            })
+            .collect();
+        let bytes = write_gpkg(&features, &opts()).unwrap();
+        let back = read_gpkg(&bytes).unwrap();
+        assert_eq!(back.len(), 400);
+        for (i, f) in back.iter().enumerate() {
+            assert_eq!(f.properties["fid"].as_i64(), Some(i as i64));
+            assert_eq!(f.geometry, features[i].geometry, "feature {i}");
+        }
     }
 
     #[test]
