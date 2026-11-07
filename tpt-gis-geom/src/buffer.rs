@@ -52,23 +52,45 @@ pub fn buffer_line(points: &[Point], distance: f64, segments: usize) -> Vec<Owne
     merge_all(pieces)
 }
 
-/// The buffer of a hole-free polygon: the polygon itself, plus its edges swept outward
-/// and round joins at its vertices. Returns `None` if the polygon has holes or the
-/// distance is negative (erosion is not supported). A zero distance returns the polygon
-/// unchanged.
+/// The buffer of a polygon: the exterior grows by `distance`, and each hole shrinks.
+///
+/// A hole's buffered region is the hole minus the buffer of its boundary (the eroded
+/// hole), so the result is the buffer of the exterior minus each eroded hole. Round
+/// joins are used throughout. Returns `None` for a negative distance (erosion of the
+/// exterior is not supported). A zero distance returns the polygon unchanged.
 #[must_use]
 pub fn buffer_polygon(
     polygon: &Polygon,
     distance: f64,
     segments: usize,
 ) -> Option<Vec<OwnedPolygon>> {
-    if !polygon.interiors.is_empty() || distance < 0.0 {
+    if distance.is_nan() || distance < 0.0 {
         return None;
     }
-    let ring = polygon.exterior;
     if distance == 0.0 {
-        return Some(vec_of(ring.to_vec()));
+        let mut rings = alloc::vec![polygon.exterior.to_vec()];
+        rings.extend(polygon.interiors.iter().map(|h| h.to_vec()));
+        return Some(alloc::vec![OwnedPolygon { rings }]);
     }
+
+    let mut result = buffer_rings(polygon.exterior, distance, segments);
+    for hole in polygon.interiors.iter().copied() {
+        let hole_region = alloc::vec![OwnedPolygon { rings: alloc::vec![hole.to_vec()] }];
+        // The hole's boundary buffer, as a set of polygons.
+        let boundary = buffer_line(hole, distance, segments);
+        let mut eroded = hole_region;
+        for cutter in &boundary {
+            eroded = subtract_all(eroded, cutter);
+        }
+        for cutter in &eroded {
+            result = subtract_all(result, cutter);
+        }
+    }
+    Some(result)
+}
+
+/// The buffer of a single ring (the polygon's exterior, ignoring holes).
+fn buffer_rings(ring: &[Point], distance: f64, segments: usize) -> Vec<OwnedPolygon> {
     let mut pieces: Vec<Vec<Point>> = alloc::vec![ring.to_vec()];
     let n = ring.len();
     for i in 0..n {
@@ -79,7 +101,17 @@ pub fn buffer_polygon(
     for &p in ring {
         pieces.push(disk(p, distance, segments));
     }
-    Some(merge_all(pieces))
+    merge_all(pieces)
+}
+
+/// Removes `cutter` from every polygon in `parts`.
+fn subtract_all(parts: Vec<OwnedPolygon>, cutter: &OwnedPolygon) -> Vec<OwnedPolygon> {
+    let mut out = Vec::new();
+    for part in &parts {
+        let pieces = with_polygon(part, |a| with_polygon(cutter, |b| clip::difference(a, b)));
+        out.extend(pieces);
+    }
+    out
 }
 
 /// The regular `segments`-gon of radius `r` centred on `c`, as a ring.
@@ -226,6 +258,54 @@ mod tests {
         assert!((total_area(&parts) - 16.0).abs() < 1e-9);
     }
 
+    /// A 10×10 square with a 4×4 hole, buffered by 1: the outer buffer has area 140 + π,
+    /// and the hole erodes to a 2×2 square, which is removed from the result.
+    #[test]
+    fn buffer_shrinks_holes() {
+        let outer = [
+            Point::new(0.0, 0.0),
+            Point::new(10.0, 0.0),
+            Point::new(10.0, 10.0),
+            Point::new(0.0, 10.0),
+            Point::new(0.0, 0.0),
+        ];
+        let hole = [
+            Point::new(3.0, 3.0),
+            Point::new(7.0, 3.0),
+            Point::new(7.0, 7.0),
+            Point::new(3.0, 7.0),
+            Point::new(3.0, 3.0),
+        ];
+        let holes: [&[Point]; 1] = [&hole];
+        let parts = buffer_polygon(&Polygon::new(&outer, &holes), 1.0, 64).unwrap();
+        let area = total_area(&parts);
+        let expected = 140.0 + core::f64::consts::PI - 4.0;
+        assert!(rel_err(area, expected) < 2e-3, "area {area} vs {expected}");
+        assert!(parts.iter().any(|p| p.rings.len() == 2), "hole should remain: {parts:?}");
+    }
+
+    /// A hole smaller than twice the distance disappears entirely.
+    #[test]
+    fn buffer_fills_small_holes() {
+        let outer = [
+            Point::new(0.0, 0.0),
+            Point::new(10.0, 0.0),
+            Point::new(10.0, 10.0),
+            Point::new(0.0, 10.0),
+            Point::new(0.0, 0.0),
+        ];
+        let hole = [
+            Point::new(4.0, 4.0),
+            Point::new(6.0, 4.0),
+            Point::new(6.0, 6.0),
+            Point::new(4.0, 6.0),
+            Point::new(4.0, 4.0),
+        ];
+        let holes: [&[Point]; 1] = [&hole];
+        let parts = buffer_polygon(&Polygon::new(&outer, &holes), 1.0, 64).unwrap();
+        assert!(parts.iter().all(|p| p.rings.len() == 1), "{parts:?}");
+    }
+
     #[test]
     fn unsupported_inputs_are_refused() {
         let ring = [
@@ -234,14 +314,6 @@ mod tests {
             Point::new(4.0, 4.0),
             Point::new(0.0, 0.0),
         ];
-        let hole = [
-            Point::new(1.0, 1.0),
-            Point::new(2.0, 1.0),
-            Point::new(2.0, 2.0),
-            Point::new(1.0, 1.0),
-        ];
-        let holes: [&[Point]; 1] = [&hole];
-        assert!(buffer_polygon(&Polygon::new(&ring, &holes), 1.0, 8).is_none());
         assert!(buffer_polygon(&Polygon::from_exterior(&ring), -1.0, 8).is_none());
         assert!(buffer_point(Point::new(0.0, 0.0), 0.0, 8).is_empty());
     }
