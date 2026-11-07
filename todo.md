@@ -497,7 +497,9 @@ the same logic, not real GDAL/QGIS/libtiff output; add third-party fixtures.
       ETRS89 / BNG / Lambert-93 registry entries, general `transform(from, to)`
       - Done: LCC (with Lambert-93), Albers, generic Transverse Mercator (UTM is a
         special case), Web Mercator longitude wrapping.
-      - Open: EPSG registry entries, BNG (needs the OSTN15 grid), general transform.
+      - Done: `crs::transform(p, from, to)` between WGS84, Web Mercator, UTM, Lambert-93 and
+        Conus Albers, checked against PROJ on 231 pairs (worst 0.96 mm).
+      - Open: more EPSG registry entries, BNG (needs the OSTN15 grid), datum shifts.
 - [x] Karney geodesics (fixes Vincenty antipodal failure) — inverse and direct, checked
       against GeographicLib; not done: geodesic area (`S12`) and line sampling
 - [ ] I/O: ISO WKB Z/M + EWKB; WKT `EMPTY`/`Z`/`SRID=`; bare GeoJSON Feature/Geometry,
@@ -522,7 +524,9 @@ the same logic, not real GDAL/QGIS/libtiff output; add third-party fixtures.
       H3/S2 polygon covering
       - Done: `RTree::remove`, `RTree::nearest` / `nearest_iter`,
         `polygon_intersection_join`, `nearest_polygon_join`.
-      - Open: H3/S2 polygon covering.
+      - Done: H3 polygon covering (`h3::polygon_cells`, the centroid-containment rule, checked
+        against a brute-force lattice reference).
+      - Open: S2 polygon covering.
 
 ### 4.5 Innovation
 - [x] **Geofence compiler**: `tptgis geofence-compile in.geojson > fence.rs` emitting a
