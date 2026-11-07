@@ -496,7 +496,7 @@ fn assemble(mut edges: Vec<ResultEdge>, eps: f64) -> Vec<OwnedPolygon> {
                 }
                 let out = sub(edges[k].1, to);
                 let turn = atan2(cross(incoming, out), incoming.x * out.x + incoming.y * out.y);
-                if best.map_or(true, |(_, t)| turn > t) {
+                if best.is_none_or(|(_, t)| turn > t) {
                     best = Some((k, turn));
                 }
             }
@@ -535,7 +535,7 @@ fn assemble(mut edges: Vec<ResultEdge>, eps: f64) -> Vec<OwnedPolygon> {
         for (idx, poly) in polygons.iter().enumerate() {
             if point_in_ring(probe, &poly.rings[0]) {
                 let area = ring_area(&poly.rings[0]).fabs();
-                if target.map_or(true, |(_, a)| area < a) {
+                if target.is_none_or(|(_, a)| area < a) {
                     target = Some((idx, area));
                 }
             }

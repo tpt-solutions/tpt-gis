@@ -14,16 +14,18 @@ use crate::point::Point;
 use crate::predicates::tolerance_for;
 
 /// How two segments meet.
-enum Contact {
+pub(crate) enum Contact {
     /// No common point.
     None,
     /// A common point.
     Point(Point),
-    /// A common stretch of positive length.
-    Overlap,
+    /// A common stretch of positive length, from one end point to the other. The end points
+    /// are read only with the `alloc` feature (`within`), so they are unused without it.
+    #[cfg_attr(not(feature = "alloc"), allow(dead_code))]
+    Overlap(Point, Point),
 }
 
-fn sub(a: Point, b: Point) -> (f64, f64) {
+pub(crate) fn sub(a: Point, b: Point) -> (f64, f64) {
     (a.x - b.x, a.y - b.y)
 }
 
@@ -32,7 +34,7 @@ fn cross(u: (f64, f64), v: (f64, f64)) -> f64 {
 }
 
 /// How segment `a1→a2` meets segment `b1→b2`.
-fn segment_contact(a1: Point, a2: Point, b1: Point, b2: Point) -> Contact {
+pub(crate) fn segment_contact(a1: Point, a2: Point, b1: Point, b2: Point) -> Contact {
     let tol = tolerance_for(&[a1, a2, b1, b2]);
     let r = sub(a2, a1);
     let s = sub(b2, b1);
@@ -67,7 +69,10 @@ fn segment_contact(a1: Point, a2: Point, b1: Point, b2: Point) -> Contact {
     let hi = t1.max(t2).min(1.0);
     let overlap = (hi - lo) * len_r;
     if overlap > tol {
-        Contact::Overlap
+        Contact::Overlap(
+            Point::new(a1.x + lo * r.0, a1.y + lo * r.1),
+            Point::new(a1.x + hi * r.0, a1.y + hi * r.1),
+        )
     } else if hi >= lo - tol / len_r {
         // They touch at one end point.
         let t = lo.clamp(0.0, 1.0);
@@ -78,7 +83,7 @@ fn segment_contact(a1: Point, a2: Point, b1: Point, b2: Point) -> Contact {
 }
 
 /// Whether `p` is one of the two end points of a line string.
-fn is_end_point(p: Point, line: &[Point]) -> bool {
+pub(crate) fn is_end_point(p: Point, line: &[Point]) -> bool {
     let tol = tolerance_for(&[p]);
     let near = |q: Point| (q.x - p.x).fabs() <= tol && (q.y - p.y).fabs() <= tol;
     match (line.first(), line.last()) {
@@ -103,7 +108,7 @@ pub fn linestrings_cross(a: &LineString, b: &LineString) -> bool {
             match segment_contact(sa[0], sa[1], sb[0], sb[1]) {
                 Contact::None => {}
                 // A shared stretch is one-dimensional in the interiors, so not `crosses`.
-                Contact::Overlap => return false,
+                Contact::Overlap(_, _) => return false,
                 Contact::Point(p) => {
                     if !is_end_point(p, a.points) && !is_end_point(p, b.points) {
                         interiors_meet = true;

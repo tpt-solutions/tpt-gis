@@ -27,7 +27,7 @@ while len(rows) < 600:
         lb = LineString(b)
         if lb.length == 0:
             continue
-    rows.append(";".join([enc(a), enc(b), str(int(la.crosses(lb)))]))
+    rows.append(";".join([enc(a), enc(b), str(int(la.crosses(lb))), str(int(la.within(lb)))]))
 with open(OUT, "w", newline="\n") as f:
     f.write("# line_a;line_b;crosses  (GEOS via shapely)\n")
     f.write("\n".join(rows) + "\n")

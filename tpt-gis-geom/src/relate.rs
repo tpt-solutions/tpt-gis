@@ -12,12 +12,13 @@
 
 use crate::clip;
 use crate::float_ext::Fabs as _;
+use crate::line_relate::{is_end_point, segment_contact, sub, Contact};
 use crate::line_string::LineString;
 use crate::point::Point;
 use crate::polygon::Polygon;
 use crate::predicates::{
     covers_point, polygon_contains_polygon, polygons_intersect, ring_edges, rings,
-    segments_intersect, strictly_inside,
+    segments_intersect, strictly_inside, tolerance_for,
 };
 use alloc::vec::Vec;
 
@@ -136,6 +137,66 @@ pub fn line_crosses_polygon(line: &LineString, poly: &Polygon) -> bool {
 pub fn line_within_polygon(line: &LineString, poly: &Polygon) -> bool {
     let (inside, outside) = classify_line_parts(line, poly);
     inside && !outside
+}
+
+/// Returns `true` if every point of `a` lies on `b` and some point of `a` lies in the interior
+/// of `b`: the OGC `within` relation for two line strings.
+///
+/// Each segment of `a` is split where it meets `b`, and each piece's midpoint is tested against
+/// `b`. A piece on `b` that is not at `b`'s end points gives interior contact.
+#[must_use]
+pub fn linestring_within_linestring(a: &LineString, b: &LineString) -> bool {
+    if a.points.len() < 2 || b.points.len() < 2 {
+        return false;
+    }
+    let mut interiors_meet = false;
+    let mut cuts: Vec<f64> = Vec::new();
+    for sa in a.points.windows(2) {
+        let (p, q) = (sa[0], sa[1]);
+        let r = sub(q, p);
+        let len_sq = r.0 * r.0 + r.1 * r.1;
+        cuts.clear();
+        cuts.push(0.0);
+        cuts.push(1.0);
+        if len_sq == 0.0 {
+            continue;
+        }
+        let param = |x: Point| {
+            let d = sub(x, p);
+            ((d.0 * r.0 + d.1 * r.1) / len_sq).clamp(0.0, 1.0)
+        };
+        for sb in b.points.windows(2) {
+            match segment_contact(p, q, sb[0], sb[1]) {
+                Contact::None => {}
+                Contact::Point(x) => cuts.push(param(x)),
+                Contact::Overlap(x, y) => {
+                    cuts.push(param(x));
+                    cuts.push(param(y));
+                }
+            }
+        }
+        cuts.sort_by(f64::total_cmp);
+        for pair in cuts.windows(2) {
+            if pair[1] - pair[0] <= 1e-12 {
+                continue;
+            }
+            let t = 0.5 * (pair[0] + pair[1]);
+            let mid = Point::new(p.x + t * r.0, p.y + t * r.1);
+            if !on_line(mid, b.points) {
+                return false;
+            }
+            if !is_end_point(mid, b.points) {
+                interiors_meet = true;
+            }
+        }
+    }
+    interiors_meet
+}
+
+/// Whether `p` lies on some segment of the polyline `line`, within tolerance.
+fn on_line(p: Point, line: &[Point]) -> bool {
+    let tol = tolerance_for(&[p]);
+    line.windows(2).any(|w| crate::distance::point_to_segment(p, w[0], w[1]) <= tol)
 }
 
 #[cfg(test)]

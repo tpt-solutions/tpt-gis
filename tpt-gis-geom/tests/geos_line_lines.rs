@@ -6,6 +6,8 @@ use std::path::PathBuf;
 
 use tpt_gis_geom::line_relate::linestrings_cross;
 use tpt_gis_geom::line_string::LineString;
+#[cfg(feature = "alloc")]
+use tpt_gis_geom::relate::linestring_within_linestring;
 use tpt_gis_geom::Point;
 
 fn parse_points(text: &str) -> Vec<Point> {
@@ -32,12 +34,27 @@ fn line_line_crosses_agrees_with_geos() {
         let a_points = parse_points(f[0]);
         let b_points = parse_points(f[1]);
         let want = f[2] == "1";
+        #[cfg(feature = "alloc")]
+        let want_within = f[3] == "1";
         let got = linestrings_cross(&LineString::new(&a_points), &LineString::new(&b_points));
         if got {
             positives += 1;
         }
         if got != want {
-            mismatches.push(format!("row {}: ours {got}, GEOS {want}", index + 1));
+            mismatches.push(format!("row {}: crosses ours {got}, GEOS {want}", index + 1));
+        }
+        #[cfg(feature = "alloc")]
+        {
+            let got_within = linestring_within_linestring(
+                &LineString::new(&a_points),
+                &LineString::new(&b_points),
+            );
+            if got_within != want_within {
+                mismatches.push(format!(
+                    "row {}: within ours {got_within}, GEOS {want_within}",
+                    index + 1
+                ));
+            }
         }
         checked += 1;
     }
