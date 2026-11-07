@@ -162,6 +162,8 @@ const COMPRESSION_LZW: u16 = 5;
 const COMPRESSION_PACKBITS: u16 = 32773;
 const COMPRESSION_DEFLATE: u16 = 8;
 const COMPRESSION_DEFLATE_PK: u16 = 32946;
+/// ZSTD (the value GDAL and libtiff use for ZSTD-compressed TIFFs).
+const COMPRESSION_ZSTD: u16 = 50000;
 
 /// SampleFormat codes.
 const SAMPLEFORMAT_UINT: u16 = 1;
@@ -1070,8 +1072,25 @@ fn decompress(raw: &[u8], compression: u16, expected: usize) -> Result<Vec<u8>> 
         COMPRESSION_PACKBITS => decode_packbits(raw, expected),
         COMPRESSION_DEFLATE | COMPRESSION_DEFLATE_PK => decode_deflate(raw, expected),
         COMPRESSION_LZW => decode_lzw(raw, expected),
+        COMPRESSION_ZSTD => decode_zstd(raw, expected),
         _ => Err(GeoTiffError::Unsupported("compression scheme")),
     }
+}
+
+/// Decompresses a ZSTD frame with the pure-Rust `ruzstd` decoder. As with DEFLATE, the
+/// reader stops after `expected + 1` bytes, so a hostile frame cannot allocate without
+/// bound.
+fn decode_zstd(raw: &[u8], expected: usize) -> Result<Vec<u8>> {
+    use std::io::Read;
+    let decoder = ruzstd::decoding::StreamingDecoder::new(raw)
+        .map_err(|_| GeoTiffError::Decompress("ZSTD"))?;
+    let mut limited = decoder.take((expected as u64).saturating_add(1));
+    let mut out = Vec::with_capacity(expected.min(MAX_DECODE_BYTES));
+    limited.read_to_end(&mut out).map_err(|_| GeoTiffError::Decompress("ZSTD"))?;
+    if out.len() > expected {
+        return Err(GeoTiffError::SizeMismatch("ZSTD output exceeds declared size"));
+    }
+    Ok(out)
 }
 
 /// Inflates a DEFLATE stream using the pure-Rust `miniz_oxide` backend of
@@ -1380,6 +1399,7 @@ pub mod testsupport {
             COMPRESSION_DEFLATE | COMPRESSION_DEFLATE_PK => deflate_encode(pixels),
             COMPRESSION_LZW => lzw_encode(pixels),
             COMPRESSION_PACKBITS => packbits_encode(pixels),
+            COMPRESSION_ZSTD => zstd_raw_encode(pixels),
             other => panic!("fixture does not know compression {other}"),
         };
 
@@ -1428,6 +1448,29 @@ pub mod testsupport {
 
     fn lzw_encode(data: &[u8]) -> Vec<u8> {
         weezl::encode::Encoder::new(weezl::BitOrder::Msb, 8).encode(data).expect("lzw encode")
+    }
+
+    /// A ZSTD frame made only of raw (uncompressed) blocks. The format allows this, so the
+    /// fixture can exercise the frame and block plumbing without an encoder.
+    pub fn zstd_raw_frame_for_tests(data: &[u8]) -> Vec<u8> {
+        zstd_raw_encode(data)
+    }
+
+    fn zstd_raw_encode(data: &[u8]) -> Vec<u8> {
+        const MAX_BLOCK: usize = 128 * 1024;
+        let mut out = vec![0x28, 0xB5, 0x2F, 0xFD]; // frame magic
+        out.push(0xA0); // single segment, 4-byte content size
+        out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        let chunks: Vec<&[u8]> =
+            if data.is_empty() { vec![&[]] } else { data.chunks(MAX_BLOCK).collect() };
+        for (i, chunk) in chunks.iter().enumerate() {
+            let last = u32::from(i + 1 == chunks.len());
+            // Block header: bit 0 last flag, bits 1-2 type (0 = raw), bits 3.. size.
+            let header = last | ((chunk.len() as u32) << 3);
+            out.extend_from_slice(&header.to_le_bytes()[..3]);
+            out.extend_from_slice(chunk);
+        }
+        out
     }
 
     fn packbits_encode(data: &[u8]) -> Vec<u8> {
@@ -1632,6 +1675,29 @@ mod tests {
 
     /// A 2×3 uncompressed image with RowsPerStrip = 2: the second strip holds a single
     /// row. Its decode must use the short row count, not the declared rows per strip.
+    /// A ZSTD-compressed GeoTIFF decodes to the same pixels as the uncompressed one.
+    #[test]
+    fn zstd_compressed_tiff_round_trips() {
+        let pixels: Vec<u8> = (0..16u8).map(|v| v.wrapping_mul(17)).collect();
+        let bytes = testsupport::make_compressed_tiff(COMPRESSION_ZSTD, &pixels, 4, 4);
+        let band = GeoTiff::parse(&bytes).unwrap().read().unwrap();
+        assert_eq!((band.width(), band.height()), (4, 4));
+        let cells = band.as_u8().expect("8-bit band");
+        for row in 0..4 {
+            for col in 0..4 {
+                assert_eq!(cells.get(col, row), Some(pixels[row * 4 + col]), "({col},{row})");
+            }
+        }
+    }
+
+    /// A frame that claims more output than the image holds is refused, not inflated.
+    #[test]
+    fn zstd_output_beyond_the_declared_size_is_refused() {
+        let frame = testsupport::zstd_raw_frame_for_tests(&[7u8; 64]);
+        assert!(decode_zstd(&frame, 16).is_err());
+        assert_eq!(decode_zstd(&frame, 64).unwrap(), vec![7u8; 64]);
+    }
+
     /// Under PixelIsPoint the tiepoint is the centre of the first pixel, so the image corner
     /// is half a pixel up and to the left. The fixture is patched from PixelIsArea (the
     /// default) to PixelIsPoint, where the corner moves from (0, 2) to (-0.5, 2.5) for a

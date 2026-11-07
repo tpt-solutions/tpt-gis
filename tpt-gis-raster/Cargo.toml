@@ -23,13 +23,15 @@ libm = { version = "0.2", default-features = false }
 flate2 = { version = "1.1", default-features = false, features = ["rust_backend"], optional = true }
 # LZW (TIFF variant), pure Rust, MIT/Apache-2.0.
 weezl = { version = "0.1", default-features = false, features = ["alloc"], optional = true }
+# Pure-Rust zstd decoder (MIT), for ZSTD-compressed GeoTIFFs. Decode only.
+ruzstd = { version = "0.8", default-features = false, features = ["std"], optional = true }
 # `rustls-tls` rather than `native-tls`: no OpenSSL/SChannel FFI.
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"], optional = true }
 
 [features]
 default = ["std"]
 ## Enables the (Geo)TIFF/COG readers, which need `std::io` for DEFLATE streams.
-std = ["dep:flate2", "dep:weezl"]
+std = ["dep:flate2", "dep:weezl", "dep:ruzstd"]
 ## Enables the async HTTP Range-request streaming reader ([`http`](crate::http)).
 http = ["std", "dep:reqwest"]
 
