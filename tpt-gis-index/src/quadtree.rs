@@ -35,7 +35,7 @@ impl<T> QuadNode<T> {
 
     fn insert(&mut self, bbox: Rect, value: T, depth: usize) {
         if self.children.is_none() && self.items.len() >= MAX_ITEMS_PER_NODE && depth < MAX_DEPTH {
-            self.subdivide();
+            self.subdivide(depth);
         }
 
         if let Some(children) = &mut self.children {
@@ -47,7 +47,10 @@ impl<T> QuadNode<T> {
         self.items.push((bbox, value));
     }
 
-    fn subdivide(&mut self) {
+    /// Splits this node into quadrants. `depth` is this node's own depth; pushed-down
+    /// items are re-inserted at it so the [`MAX_DEPTH`] bound counts from the root
+    /// rather than restarting at every subdivision.
+    fn subdivide(&mut self, depth: usize) {
         let children =
             quadrant_bounds(&self.bounds).into_iter().map(QuadNode::new).collect::<Vec<_>>();
         self.children = Some(children);
@@ -56,7 +59,7 @@ impl<T> QuadNode<T> {
         // the rest stay here.
         let existing = core::mem::take(&mut self.items);
         for (bbox, value) in existing {
-            self.insert(bbox, value, 0);
+            self.insert(bbox, value, depth);
         }
     }
 
@@ -169,6 +172,28 @@ mod tests {
 
     fn rect(min_x: f64, min_y: f64, max_x: f64, max_y: f64) -> Rect {
         Rect::new(Point::new(min_x, min_y), Point::new(max_x, max_y))
+    }
+
+    /// Longest root-to-leaf path length, counting nodes.
+    fn tree_depth<T>(node: &QuadNode<T>) -> usize {
+        1 + node
+            .children
+            .as_ref()
+            .map_or(0, |children| children.iter().map(tree_depth).max().unwrap_or(0))
+    }
+
+    /// Many coincident zero-size boxes can never be separated by subdivision. The depth
+    /// cap must hold for the whole tree; previously each subdivision restarted the
+    /// count, so the tree could grow to roughly twice `MAX_DEPTH`.
+    #[test]
+    fn depth_cap_counts_from_the_root() {
+        let mut tree = Quadtree::new(rect(0.0, 0.0, 1.0, 1.0));
+        for i in 0..200 {
+            tree.insert(rect(0.25, 0.25, 0.25, 0.25), i);
+        }
+        assert_eq!(tree.len(), 200);
+        let depth = tree_depth(&tree.root);
+        assert!(depth <= MAX_DEPTH + 1, "tree depth {depth} exceeds MAX_DEPTH + 1");
     }
 
     #[test]

@@ -16,6 +16,9 @@
 //! with better query performance than repeated incremental insertion, at the cost
 //! of requiring the whole dataset up front.
 
+use std::cmp::Ordering;
+use std::collections::BinaryHeap;
+
 use tpt_gis_geom::{Point, Rect};
 
 /// Maximum entries (leaf items or child nodes) per node before it splits.
@@ -105,6 +108,58 @@ impl<T> RTree<T> {
     }
 
     /// Returns every value whose stored bounding box intersects `region`.
+    /// Removes one entry whose bounding box equals `bbox` and whose value equals
+    /// `value`. Returns `true` if an entry was removed.
+    ///
+    /// Underfull nodes are dissolved and their entries reinserted (the standard
+    /// "condense tree" step), so the tree stays balanced.
+    pub fn remove(&mut self, bbox: &Rect, value: &T) -> bool
+    where
+        T: PartialEq,
+    {
+        let mut orphans = Vec::new();
+        if !remove_from(&mut self.root, bbox, value, &mut orphans) {
+            return false;
+        }
+        // Shrink the tree while the root is an internal node with a single child.
+        loop {
+            match &mut self.root {
+                Node::Internal(children) if children.len() == 1 => {
+                    let (_, child) = children.pop().expect("one child");
+                    self.root = *child;
+                }
+                _ => break,
+            }
+        }
+        for (rect, item) in orphans {
+            self.insert(rect, item);
+        }
+        true
+    }
+
+    /// The `k` values whose bounding boxes are nearest to `point`, closest first, each
+    /// with its distance. Distance is measured from `point` to the stored bounding box
+    /// (zero if the point lies inside it).
+    ///
+    /// Uses best-first search over the tree, so only the nodes needed for the answer
+    /// are visited.
+    #[must_use]
+    pub fn nearest(&self, point: Point, k: usize) -> Vec<(f64, &T)> {
+        self.nearest_iter(point).take(k).collect()
+    }
+
+    /// Lazily yields every stored value in order of increasing bounding-box distance
+    /// from `point`. Each step only expands the nodes needed for the next value, so
+    /// callers that stop early (for example, once a refined distance is known to beat
+    /// every remaining box) do not pay for the rest of the tree.
+    #[must_use]
+    pub fn nearest_iter(&self, point: Point) -> Nearest<'_, T> {
+        let mut heap = BinaryHeap::new();
+        heap.push(Candidate { dist: 0.0, kind: Kind::Node(&self.root) });
+        Nearest { point, heap }
+    }
+
+    /// Returns every value whose stored bounding box intersects `region`.
     ///
     /// This is a bounding-box filter, not an exact geometry test — callers with a
     /// precise shape (not just its bbox) should refine these candidates with an
@@ -134,6 +189,145 @@ impl<T> RTree<T> {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+}
+
+/// Number of direct entries (leaf items or child nodes) in a node.
+fn node_len<T>(node: &Node<T>) -> usize {
+    match node {
+        Node::Leaf(entries) => entries.len(),
+        Node::Internal(children) => children.len(),
+    }
+}
+
+/// Whether `outer` covers `inner` entirely (boundary inclusive).
+fn rect_covers(outer: &Rect, inner: &Rect) -> bool {
+    inner.min.x >= outer.min.x
+        && inner.max.x <= outer.max.x
+        && inner.min.y >= outer.min.y
+        && inner.max.y <= outer.max.y
+}
+
+/// Removes the first leaf entry matching `(bbox, value)` under `node`. Children left
+/// underfull are dissolved and their entries pushed onto `orphans` for reinsertion.
+fn remove_from<T: PartialEq>(
+    node: &mut Node<T>,
+    bbox: &Rect,
+    value: &T,
+    orphans: &mut Vec<(Rect, T)>,
+) -> bool {
+    match node {
+        Node::Leaf(entries) => match entries.iter().position(|(r, v)| r == bbox && v == value) {
+            Some(pos) => {
+                entries.remove(pos);
+                true
+            }
+            None => false,
+        },
+        Node::Internal(children) => {
+            for i in 0..children.len() {
+                if !rect_covers(&children[i].0, bbox) {
+                    continue;
+                }
+                if remove_from(&mut children[i].1, bbox, value, orphans) {
+                    if node_len(&children[i].1) < MIN_ENTRIES {
+                        let (_, child) = children.remove(i);
+                        drain_items(*child, orphans);
+                    } else {
+                        children[i].0 = children[i].1.bbox();
+                    }
+                    return true;
+                }
+            }
+            false
+        }
+    }
+}
+
+/// Moves every leaf entry of a subtree into `out`.
+fn drain_items<T>(node: Node<T>, out: &mut Vec<(Rect, T)>) {
+    match node {
+        Node::Leaf(entries) => out.extend(entries),
+        Node::Internal(children) => {
+            for (_, child) in children {
+                drain_items(*child, out);
+            }
+        }
+    }
+}
+
+/// Distance from `p` to the nearest point of `rect` (zero when `p` is inside it).
+fn min_distance(rect: &Rect, p: Point) -> f64 {
+    let dx = (rect.min.x - p.x).max(0.0).max(p.x - rect.max.x);
+    let dy = (rect.min.y - p.y).max(0.0).max(p.y - rect.max.y);
+    (dx * dx + dy * dy).sqrt()
+}
+
+/// A best-first search frontier entry: either a subtree or a stored value, keyed by
+/// its distance from the query point. Ordered so `BinaryHeap` pops the nearest first.
+struct Candidate<'a, T> {
+    dist: f64,
+    kind: Kind<'a, T>,
+}
+
+enum Kind<'a, T> {
+    Node(&'a Node<T>),
+    Item(&'a T),
+}
+
+/// Lazy nearest-first iterator returned by [`RTree::nearest_iter`].
+pub struct Nearest<'a, T> {
+    point: Point,
+    heap: BinaryHeap<Candidate<'a, T>>,
+}
+
+impl<'a, T> Iterator for Nearest<'a, T> {
+    type Item = (f64, &'a T);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while let Some(Candidate { dist, kind }) = self.heap.pop() {
+            match kind {
+                Kind::Item(value) => return Some((dist, value)),
+                Kind::Node(Node::Leaf(entries)) => {
+                    for (rect, value) in entries {
+                        self.heap.push(Candidate {
+                            dist: min_distance(rect, self.point),
+                            kind: Kind::Item(value),
+                        });
+                    }
+                }
+                Kind::Node(Node::Internal(children)) => {
+                    for (rect, child) in children {
+                        self.heap.push(Candidate {
+                            dist: min_distance(rect, self.point),
+                            kind: Kind::Node(child),
+                        });
+                    }
+                }
+            }
+        }
+        None
+    }
+}
+
+impl<T> PartialEq for Candidate<'_, T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.dist.total_cmp(&other.dist) == Ordering::Equal
+    }
+}
+
+impl<T> Eq for Candidate<'_, T> {}
+
+impl<T> PartialOrd for Candidate<'_, T> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<T> Ord for Candidate<'_, T> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        // Reversed: the max-heap then yields the smallest distance first.
+        other.dist.total_cmp(&self.dist)
     }
 }
 
@@ -345,13 +539,12 @@ fn str_pack<E>(mut items: Vec<(Rect, E)>, group_size: usize) -> Vec<Vec<(Rect, E
     let num_slices = (num_groups as f64).sqrt().ceil() as usize;
     let slice_capacity = (num_slices * group_size).max(group_size);
 
-    items.sort_by(|a, b| center(a.0).x.partial_cmp(&center(b.0).x).expect("finite coordinates"));
+    items.sort_by(|a, b| center(a.0).x.total_cmp(&center(b.0).x));
 
     let mut start = 0;
     while start < n {
         let end = (start + slice_capacity).min(n);
-        items[start..end]
-            .sort_by(|a, b| center(a.0).y.partial_cmp(&center(b.0).y).expect("finite coordinates"));
+        items[start..end].sort_by(|a, b| center(a.0).y.total_cmp(&center(b.0).y));
         start = end;
     }
 
@@ -475,10 +668,87 @@ mod tests {
         assert!(hits.contains(&&0usize));
     }
 
+    /// Non-finite bounding boxes must not panic bulk loading (they used to hit an
+    ///  in the sort). Every item is kept, and finite items stay queryable.
+    #[test]
+    fn bulk_load_tolerates_nan_bboxes() {
+        let mut entries: Vec<(Rect, usize)> =
+            (0..50).map(|i| (rect(i as f64, 0.0, i as f64 + 1.0, 1.0), i)).collect();
+        entries.push((rect(f64::NAN, 0.0, f64::NAN, 1.0), 999));
+        let tree = RTree::bulk_load(entries);
+        assert_eq!(tree.len(), 51);
+        let hits = tree.query(&rect(-10.0, -10.0, 100.0, 100.0));
+        assert!(hits.contains(&&0usize));
+        assert!(hits.contains(&&49usize));
+    }
+
     #[test]
     fn bulk_load_empty_input_yields_empty_tree() {
         let tree: RTree<()> = RTree::bulk_load(Vec::new());
         assert!(tree.is_empty());
+    }
+
+    #[test]
+    fn remove_deletes_matching_entry_and_keeps_others() {
+        let mut tree = RTree::new();
+        for i in 0..200usize {
+            let x = (i % 20) as f64 * 3.0;
+            let y = (i / 20) as f64 * 3.0;
+            tree.insert(rect(x, y, x + 1.0, y + 1.0), i);
+        }
+        // Remove every third entry.
+        for i in (0..200usize).step_by(3) {
+            let x = (i % 20) as f64 * 3.0;
+            let y = (i / 20) as f64 * 3.0;
+            assert!(tree.remove(&rect(x, y, x + 1.0, y + 1.0), &i), "entry {i} not found");
+        }
+        assert_invariants(&tree);
+        let removed = (0..200usize).step_by(3).count();
+        assert_eq!(tree.len(), 200 - removed);
+        let hits = tree.query(&rect(-1.0, -1.0, 1000.0, 1000.0));
+        assert_eq!(hits.len(), 200 - removed);
+        assert!(hits.iter().all(|v| **v % 3 != 0));
+    }
+
+    #[test]
+    fn remove_returns_false_for_missing_entries() {
+        let mut tree = RTree::new();
+        tree.insert(rect(0.0, 0.0, 1.0, 1.0), 1usize);
+        assert!(!tree.remove(&rect(0.0, 0.0, 1.0, 1.0), &2));
+        assert!(!tree.remove(&rect(5.0, 5.0, 6.0, 6.0), &1));
+        assert_eq!(tree.len(), 1);
+    }
+
+    /// `nearest` must agree with a brute-force scan over the stored boxes.
+    #[test]
+    fn nearest_matches_brute_force() {
+        let entries: Vec<(Rect, usize)> = (0..300usize)
+            .map(|i| {
+                let x = ((i * 37) % 101) as f64;
+                let y = ((i * 53) % 97) as f64;
+                (rect(x, y, x + 0.5, y + 0.5), i)
+            })
+            .collect();
+        let tree = RTree::bulk_load(entries.clone());
+        let p = Point::new(40.0, 40.0);
+        let got: Vec<(f64, usize)> = tree.nearest(p, 7).into_iter().map(|(d, v)| (d, *v)).collect();
+
+        let mut expected: Vec<f64> = entries.iter().map(|(r, _)| min_distance(r, p)).collect();
+        expected.sort_by(f64::total_cmp);
+        assert_eq!(got.len(), 7);
+        for (i, (d, _)) in got.iter().enumerate() {
+            assert!((d - expected[i]).abs() < 1e-12, "rank {i}: {d} vs {}", expected[i]);
+        }
+        // Results come back closest first.
+        assert!(got.windows(2).all(|w| w[0].0 <= w[1].0));
+    }
+
+    #[test]
+    fn nearest_handles_k_larger_than_the_tree() {
+        let mut tree = RTree::new();
+        tree.insert(rect(0.0, 0.0, 1.0, 1.0), "a");
+        assert_eq!(tree.nearest(Point::new(5.0, 5.0), 10).len(), 1);
+        assert!(tree.nearest(Point::new(5.0, 5.0), 0).is_empty());
     }
 
     #[test]

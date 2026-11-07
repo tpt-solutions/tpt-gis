@@ -4,8 +4,10 @@
 //! H3 support wraps [`h3o`](https://docs.rs/h3o), a mature, actively-maintained,
 //! from-scratch pure-Rust reimplementation of Uber's H3 (BSD-3-Clause, zero FFI,
 //! zero unsafe). S2 support is a from-scratch, pure-Rust implementation in the
-//! [`s2`] module that produces the same cell ids / tokens as Google's S2, so ids
-//! inter-operate with any other S2 tool.
+//! [`s2`] module. It uses S2-style cube-face cell ids, but its ordering is a
+//! Z-order (Morton) curve rather than Google's Hilbert curve, and tokens are fixed
+//! 16-digit hex. Ids are therefore **not** bit-compatible with Google's S2; treat
+//! them as internal to this crate.
 #![warn(missing_docs)]
 
 pub mod h3;

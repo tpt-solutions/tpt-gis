@@ -59,12 +59,27 @@ impl S2CellId {
         self.0
     }
 
+    /// Whether the raw value is a well-formed cell id: face `< 6`, and a single
+    /// level marker bit at an even position no higher than bit 60. Id `0` and any
+    /// value with a face of 6 or 7 are invalid.
+    #[must_use]
+    pub fn is_valid(self) -> bool {
+        if self.0 == 0 || self.face() >= NUM_FACES {
+            return false;
+        }
+        let marker = self.0.trailing_zeros();
+        marker % 2 == 0 && marker <= 2 * MAX_LEVEL as u32
+    }
+
     /// The cell's level, 0 (largest) .. [`MAX_LEVEL`] (smallest).
+    ///
+    /// For an invalid id (see [`S2CellId::is_valid`]) the result is unspecified but
+    /// never panics; it saturates at `0`.
     #[must_use]
     pub fn level(self) -> u8 {
         // The trailing `1` marker sits at bit 2 * (MAX_LEVEL - level).
-        let trailing = self.0.trailing_zeros() / 2;
-        MAX_LEVEL - trailing as u8
+        let trailing = (self.0.trailing_zeros() / 2) as u8;
+        MAX_LEVEL.saturating_sub(trailing)
     }
 
     /// The cube face this cell lies on, 0..6.
@@ -148,14 +163,46 @@ impl S2CellId {
 
     /// The cell containing the given latitude/longitude (degrees) at the finest
     /// level.
+    ///
+    /// # Panics
+    /// Panics if the coordinates are not finite or are out of range. Use
+    /// [`S2CellId::try_from_lat_lon_degrees`] for untrusted input.
     #[must_use]
     pub fn from_lat_lon_degrees(lat: f64, lon: f64) -> Self {
-        Self::from_lat_lon(lat.to_radians(), lon.to_radians(), MAX_LEVEL)
+        Self::try_from_lat_lon_degrees(lat, lon).expect("latitude/longitude out of range")
+    }
+
+    /// Like [`S2CellId::from_lat_lon_degrees`], but returns `None` instead of
+    /// panicking when `lat` is outside `[-90, 90]`, `lon` is outside `[-180, 180]`,
+    /// or either value is not finite.
+    #[must_use]
+    pub fn try_from_lat_lon_degrees(lat: f64, lon: f64) -> Option<Self> {
+        Self::try_from_lat_lon(lat.to_radians(), lon.to_radians(), MAX_LEVEL)
     }
 
     /// The cell containing the given latitude/longitude (radians) at `level`.
+    ///
+    /// # Panics
+    /// Panics if `level > MAX_LEVEL` or the coordinates are invalid. Use
+    /// [`S2CellId::try_from_lat_lon`] for untrusted input.
     #[must_use]
     pub fn from_lat_lon(lat: f64, lon: f64, level: u8) -> Self {
+        Self::try_from_lat_lon(lat, lon, level).expect("invalid latitude/longitude or level")
+    }
+
+    /// Like [`S2CellId::from_lat_lon`], but returns `None` instead of panicking.
+    ///
+    /// Rejects non-finite values, a `level` above [`MAX_LEVEL`], and latitudes
+    /// outside `[-π/2, π/2]` or longitudes outside `[-π, π]` (radians).
+    #[must_use]
+    pub fn try_from_lat_lon(lat: f64, lon: f64, level: u8) -> Option<Self> {
+        use core::f64::consts::{FRAC_PI_2, PI};
+        // Written so NaN fails every comparison and is rejected.
+        let lat_ok = lat.is_finite() && (-FRAC_PI_2..=FRAC_PI_2).contains(&lat);
+        let lon_ok = lon.is_finite() && (-PI..=PI).contains(&lon);
+        if !lat_ok || !lon_ok || level > MAX_LEVEL {
+            return None;
+        }
         let x = lat.cos() * lon.cos();
         let y = lat.cos() * lon.sin();
         let z = lat.sin();
@@ -165,10 +212,10 @@ impl S2CellId {
         // transform would map sphere points to the wrong cells.
         let s = uv_to_st(u);
         let t = uv_to_st(v);
-        let shift = MAX_LEVEL - level;
-        let i = st_to_ij(s) >> shift as u32;
-        let j = st_to_ij(t) >> shift as u32;
-        Self::from_face_ij(face, i, j, level)
+        let shift = u32::from(MAX_LEVEL - level);
+        let i = st_to_ij(s) >> shift;
+        let j = st_to_ij(t) >> shift;
+        Some(Self::from_face_ij(face, i, j, level))
     }
 
     /// The latitude/longitude (degrees) of the cell's centre.
@@ -207,7 +254,8 @@ impl S2CellId {
     }
 
     /// Parses a token produced by [`S2CellId::to_token`]. Returns `None` if the
-    /// string is not 16 hex digits.
+    /// string is not 16 hex digits or does not decode to a [valid](S2CellId::is_valid)
+    /// cell id.
     #[must_use]
     pub fn from_token(token: &str) -> Option<Self> {
         if token.len() != 16 {
@@ -218,7 +266,8 @@ impl S2CellId {
             let digit = ch.to_digit(16)? as u64;
             value = (value << 4) | digit;
         }
-        Some(S2CellId(value))
+        let id = S2CellId(value);
+        id.is_valid().then_some(id)
     }
 }
 
@@ -266,7 +315,8 @@ fn face_uv_to_xyz(face: u8, u: f64, v: f64) -> (f64, f64, f64) {
         // every point on those three faces.
         3 => (-1.0, -u, -v),
         4 => (u, -1.0, -v),
-        _ => (-u, -v, 1.0),
+        // Face 5 (z < 0): exact inverse of `(5, -x / z, -y / z)` with z = -1.
+        _ => (u, v, -1.0),
     }
 }
 
@@ -308,6 +358,36 @@ fn ij_to_st(pos: u64, level: u32) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn xyz_face_uv_round_trips_on_every_face() {
+        // One direction vector per cube face, including the south-polar face 5.
+        let dirs = [
+            (1.0, 0.2, -0.3),
+            (-0.2, 1.0, 0.3),
+            (-0.3, 0.2, 1.0),
+            (-1.0, 0.2, -0.3),
+            (0.3, -1.0, 0.2),
+            (0.3, -0.2, -1.0),
+        ];
+        for (expected_face, (x, y, z)) in dirs.into_iter().enumerate() {
+            let (face, u, v) = face_uv_from_xyz(x, y, z);
+            assert_eq!(face as usize, expected_face);
+            let (rx, ry, rz) = face_uv_to_xyz(face, u, v);
+            // Same direction: components are proportional to the input.
+            let scale = rx / x;
+            assert!((ry - y * scale).abs() < 1e-12, "face {face}");
+            assert!((rz - z * scale).abs() < 1e-12, "face {face}");
+            assert!(scale > 0.0, "face {face} flipped direction");
+        }
+    }
+
+    #[test]
+    fn southern_polar_point_stays_in_southern_hemisphere() {
+        let id = S2CellId::from_lat_lon_degrees(-89.0, 10.0);
+        let (lat, _lon) = id.to_lat_lon_degrees();
+        assert!(lat < -80.0, "got lat {lat}");
+    }
 
     #[test]
     fn origin_maps_to_a_cell_whose_centre_is_the_origin() {
@@ -361,5 +441,43 @@ mod tests {
         let (i, j) = id.ij();
         let rebuilt = S2CellId::from_face_ij(id.face(), i, j, id.level());
         assert_eq!(rebuilt, id);
+    }
+
+    #[test]
+    fn invalid_ids_are_detected_without_panicking() {
+        // Id 0 has no marker bit: it must be rejected and must not panic in level().
+        assert!(!S2CellId(0).is_valid());
+        assert_eq!(S2CellId(0).level(), 0);
+        // Face 6 and 7 are out of range even with a valid marker.
+        let face6 = S2CellId((6u64 << 61) | (1u64 << 60));
+        assert!(!face6.is_valid());
+        // Marker at an odd bit position does not encode a level.
+        assert!(!S2CellId((1u64 << 61) | (1u64 << 59)).is_valid());
+        // A genuine id is valid.
+        assert!(S2CellId::from_lat_lon_degrees(10.0, 20.0).is_valid());
+    }
+
+    #[test]
+    fn from_token_rejects_invalid_ids() {
+        assert_eq!(S2CellId::from_token("0000000000000000"), None);
+        assert_eq!(S2CellId::from_token("c000000000000000"), None); // face 6
+        assert_eq!(S2CellId::from_token("e000000000000000"), None); // face 7
+    }
+
+    #[test]
+    fn try_constructors_reject_bad_input() {
+        assert_eq!(S2CellId::try_from_lat_lon_degrees(f64::NAN, 0.0), None);
+        assert_eq!(S2CellId::try_from_lat_lon_degrees(0.0, f64::INFINITY), None);
+        assert_eq!(S2CellId::try_from_lat_lon_degrees(91.0, 0.0), None);
+        assert_eq!(S2CellId::try_from_lat_lon_degrees(0.0, 181.0), None);
+        assert_eq!(S2CellId::try_from_lat_lon(0.0, 0.0, MAX_LEVEL + 1), None);
+        assert_eq!(S2CellId::try_from_lat_lon(0.0, 0.0, 255), None);
+        assert!(S2CellId::try_from_lat_lon_degrees(90.0, 180.0).is_some());
+    }
+
+    #[test]
+    #[should_panic(expected = "out of range")]
+    fn infallible_constructor_still_panics_on_bad_input() {
+        let _ = S2CellId::from_lat_lon_degrees(f64::NAN, 0.0);
     }
 }

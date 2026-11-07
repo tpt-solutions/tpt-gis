@@ -247,6 +247,110 @@ pub fn spatial_join_batched<P, Q, F>(
     }
 }
 
+/// A pair of polygons whose areas (boundaries or interiors) meet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PolygonPair {
+    /// Index into the first polygon list.
+    pub left: usize,
+    /// Index into the second polygon list.
+    pub right: usize,
+}
+
+/// Polygon-polygon intersection join. Returns every `(left, right)` index pair whose
+/// polygons intersect, using the R-Tree on the right-hand bounding boxes to limit
+/// candidates before the exact `polygons_intersect` test.
+#[must_use]
+pub fn polygon_intersection_join<P, Q>(
+    left: &[IndexedPolygon<P>],
+    right: &[IndexedPolygon<Q>],
+) -> Vec<PolygonPair> {
+    let entries: Vec<(Rect, usize)> =
+        right.iter().enumerate().filter_map(|(j, p)| p.polygon.bbox().map(|b| (b, j))).collect();
+    let tree = RTree::bulk_load(entries);
+
+    let mut out = Vec::new();
+    for (i, lp) in left.iter().enumerate() {
+        let Some(bbox) = lp.polygon.bbox() else { continue };
+        for &j in tree.query(&bbox) {
+            let mut scratch_l = Vec::new();
+            let mut scratch_r = Vec::new();
+            let a = lp.polygon.as_geom(&mut scratch_l);
+            let b = right[j].polygon.as_geom(&mut scratch_r);
+            if tpt_gis_geom::predicates::polygons_intersect(&a, &b) {
+                out.push(PolygonPair { left: i, right: j });
+            }
+        }
+    }
+    out
+}
+
+/// The nearest polygon to a point, with the exact distance to it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct NearestMatch {
+    /// Index of the point in the input slice.
+    pub point: usize,
+    /// Index of the nearest polygon in the input slice.
+    pub polygon: usize,
+    /// Planar distance from the point to the polygon (zero if it lies inside).
+    pub distance: f64,
+}
+
+/// Exact planar distance from `point` to a polygon: zero if the point is inside the
+/// polygon (holes excluded), otherwise the distance to the nearest ring edge.
+#[must_use]
+pub fn point_polygon_distance(point: Point, polygon: &IoPolygon) -> f64 {
+    let mut scratch = Vec::new();
+    let geom = polygon.as_geom(&mut scratch);
+    if geom.contains_point(point) {
+        return 0.0;
+    }
+    let mut best = f64::INFINITY;
+    for ring in core::iter::once(geom.exterior).chain(geom.interiors.iter().copied()) {
+        for i in 0..ring.len() {
+            let a = ring[i];
+            let b = ring[(i + 1) % ring.len()];
+            best = best.min(tpt_gis_geom::distance::point_to_segment(point, a, b));
+        }
+    }
+    best
+}
+
+/// For each point, the nearest polygon by exact distance.
+///
+/// Polygons are visited in order of their bounding-box distance, and the search for a
+/// point stops as soon as no remaining box can be closer than the best exact match
+/// found so far. Points with no polygons produce no result.
+#[must_use]
+pub fn nearest_polygon_join<P, Q>(
+    points: &[IndexedPoint<P>],
+    polygons: &[IndexedPolygon<Q>],
+) -> Vec<NearestMatch> {
+    let entries: Vec<(Rect, usize)> =
+        polygons.iter().enumerate().filter_map(|(j, p)| p.polygon.bbox().map(|b| (b, j))).collect();
+    if entries.is_empty() {
+        return Vec::new();
+    }
+    let tree = RTree::bulk_load(entries);
+
+    let mut out = Vec::new();
+    for (i, pt) in points.iter().enumerate() {
+        let mut best: Option<NearestMatch> = None;
+        // Candidates in non-decreasing bounding-box distance; a box distance is a lower
+        // bound on the exact distance, so the scan can stop once it exceeds `best`.
+        for (box_dist, &j) in tree.nearest_iter(pt.point) {
+            if best.is_some_and(|b| box_dist > b.distance) {
+                break;
+            }
+            let d = point_polygon_distance(pt.point, &polygons[j].polygon);
+            if best.map_or(true, |b| d < b.distance) {
+                best = Some(NearestMatch { point: i, polygon: j, distance: d });
+            }
+        }
+        out.extend(best);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -428,5 +532,96 @@ mod tests {
         )];
         let results = spatial_join(&points, &polygons, SpatialJoinConfig::default());
         assert_eq!(results.len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod polygon_join_tests {
+    use super::*;
+    use tpt_gis_io::geometry::Point as IoPoint;
+
+    fn square(x0: f64, y0: f64, x1: f64, y1: f64) -> IoPolygon {
+        IoPolygon::from_exterior(vec![
+            IoPoint::new(x0, y0),
+            IoPoint::new(x1, y0),
+            IoPoint::new(x1, y1),
+            IoPoint::new(x0, y1),
+            IoPoint::new(x0, y0),
+        ])
+    }
+
+    fn indexed(polygon: IoPolygon, id: usize) -> IndexedPolygon<usize> {
+        IndexedPolygon { polygon, payload: id }
+    }
+
+    #[test]
+    fn polygon_join_finds_overlapping_pairs_only() {
+        let left =
+            vec![indexed(square(0.0, 0.0, 4.0, 4.0), 0), indexed(square(20.0, 0.0, 21.0, 1.0), 1)];
+        let right = vec![
+            indexed(square(3.0, 3.0, 6.0, 6.0), 0),
+            indexed(square(10.0, 10.0, 11.0, 11.0), 1),
+        ];
+        let pairs = polygon_intersection_join(&left, &right);
+        assert_eq!(pairs, vec![PolygonPair { left: 0, right: 0 }]);
+    }
+
+    #[test]
+    fn point_inside_hole_is_at_hole_edge_distance() {
+        // 10x10 square with a 2x2 hole at (4..6, 4..6). The point (5,5) is in the hole,
+        // so it is 1.0 from the nearest hole edge, not zero.
+        let exterior = vec![
+            IoPoint::new(0.0, 0.0),
+            IoPoint::new(10.0, 0.0),
+            IoPoint::new(10.0, 10.0),
+            IoPoint::new(0.0, 10.0),
+            IoPoint::new(0.0, 0.0),
+        ];
+        let hole = vec![
+            IoPoint::new(4.0, 4.0),
+            IoPoint::new(6.0, 4.0),
+            IoPoint::new(6.0, 6.0),
+            IoPoint::new(4.0, 6.0),
+            IoPoint::new(4.0, 4.0),
+        ];
+        let poly = IoPolygon { rings: vec![exterior, hole] };
+        let d = point_polygon_distance(Point::new(5.0, 5.0), &poly);
+        assert!((d - 1.0).abs() < 1e-9, "distance {d}");
+        assert_eq!(point_polygon_distance(Point::new(1.0, 1.0), &poly), 0.0);
+    }
+
+    /// The nearest join must match a brute-force scan over all polygons.
+    #[test]
+    fn nearest_join_matches_brute_force() {
+        let polygons: Vec<IndexedPolygon<usize>> = (0..40usize)
+            .map(|i| {
+                let x = ((i * 31) % 50) as f64;
+                let y = ((i * 17) % 50) as f64;
+                indexed(square(x, y, x + 2.0, y + 2.0), i)
+            })
+            .collect();
+        let points: Vec<IndexedPoint<usize>> = (0..25usize)
+            .map(|i| IndexedPoint {
+                point: Point::new(((i * 13) % 60) as f64 + 0.3, ((i * 7) % 60) as f64 + 0.6),
+                payload: i,
+            })
+            .collect();
+
+        let matches = nearest_polygon_join(&points, &polygons);
+        assert_eq!(matches.len(), points.len());
+        for m in &matches {
+            let p = points[m.point].point;
+            let best = polygons
+                .iter()
+                .map(|q| point_polygon_distance(p, &q.polygon))
+                .fold(f64::INFINITY, f64::min);
+            assert!(
+                (m.distance - best).abs() < 1e-9,
+                "point {}: {} vs {}",
+                m.point,
+                m.distance,
+                best
+            );
+        }
     }
 }
