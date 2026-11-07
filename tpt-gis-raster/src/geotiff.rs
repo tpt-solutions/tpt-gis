@@ -48,6 +48,17 @@ use crate::cell::CellType;
 use crate::error::RasterError;
 use crate::grid::Grid;
 
+/// Upper bound on IFDs walked in one file's main chain. Real multi-page TIFFs have a
+/// handful; the cap bounds the work done on a hostile chain.
+const MAX_IFD_CHAIN: usize = 4096;
+
+/// Converts an optional IFD tag value to `u16`, rejecting values that do not fit
+/// instead of silently truncating them (`as u16` would wrap `65537` to `1`).
+fn u16_tag(value: Option<u32>, default: u32) -> Result<u16> {
+    u16::try_from(value.unwrap_or(default))
+        .map_err(|_| GeoTiffError::Unsupported("TIFF tag value out of range"))
+}
+
 /// An error produced while parsing or decoding a (Geo)TIFF.
 #[derive(Debug, Clone, PartialEq)]
 pub enum GeoTiffError {
@@ -347,6 +358,13 @@ impl GeoTiff {
             if offset == 0 || offset >= file_len {
                 break;
             }
+            // A next-IFD pointer back to an earlier IFD would loop forever.
+            if offsets.contains(&offset) {
+                return Err(GeoTiffError::Unsupported("IFD chain contains a cycle"));
+            }
+            if offsets.len() >= MAX_IFD_CHAIN {
+                return Err(GeoTiffError::Unsupported("IFD chain is too long"));
+            }
             let parsed = Self::read_ifd(&fetch, offset, little, bigtiff)?;
             offsets.push(offset);
             current = parsed.next_ifd;
@@ -551,31 +569,45 @@ impl GeoTiff {
             .and_then(|e| e.as_u32(self.little))
             .ok_or(GeoTiffError::Unsupported("ImageLength missing"))?;
 
-        let samples_per_pixel =
-            ifd.get(277).and_then(|e| e.as_u32(self.little)).unwrap_or(1) as u16;
+        if width == 0 || height == 0 {
+            return Err(GeoTiffError::Unsupported("zero image dimension"));
+        }
+
+        let samples_per_pixel = u16_tag(ifd.get(277).and_then(|e| e.as_u32(self.little)), 1)?;
         if samples_per_pixel != 1 {
             return Err(GeoTiffError::MultiSample(samples_per_pixel as usize));
         }
 
-        let bits = ifd
-            .get(258)
-            .and_then(|e| e.as_u32(self.little))
-            .ok_or(GeoTiffError::Unsupported("BitsPerSample missing"))? as u16;
-        let sample_format = ifd.get(339).and_then(|e| e.as_u32(self.little)).unwrap_or(1) as u16;
-        let compression = ifd.get(259).and_then(|e| e.as_u32(self.little)).unwrap_or(1) as u16;
-        let predictor = ifd.get(317).and_then(|e| e.as_u32(self.little)).unwrap_or(1) as u16;
-        let planar_config = ifd.get(284).and_then(|e| e.as_u32(self.little)).unwrap_or(1) as u16;
+        let bits = u16_tag(
+            Some(
+                ifd.get(258)
+                    .and_then(|e| e.as_u32(self.little))
+                    .ok_or(GeoTiffError::Unsupported("BitsPerSample missing"))?,
+            ),
+            1,
+        )?;
+        let sample_format = u16_tag(ifd.get(339).and_then(|e| e.as_u32(self.little)), 1)?;
+        let compression = u16_tag(ifd.get(259).and_then(|e| e.as_u32(self.little)), 1)?;
+        let predictor = u16_tag(ifd.get(317).and_then(|e| e.as_u32(self.little)), 1)?;
+        let planar_config = u16_tag(ifd.get(284).and_then(|e| e.as_u32(self.little)), 1)?;
         if planar_config != 1 {
             return Err(GeoTiffError::Unsupported("planar configuration 2"));
         }
 
+        // Zero tile or strip sizes would divide by zero when locating chunks.
         let layout = if let (Some(tw), Some(th)) = (
             ifd.get(TAG_TILE_WIDTH).and_then(|e| e.as_u32(self.little)),
             ifd.get(TAG_TILE_HEIGHT).and_then(|e| e.as_u32(self.little)),
         ) {
+            if tw == 0 || th == 0 {
+                return Err(GeoTiffError::Unsupported("zero tile dimension"));
+            }
             Layout::Tiles { tile_width: tw, tile_height: th }
         } else {
             let rps = ifd.get(278).and_then(|e| e.as_u32(self.little)).unwrap_or(height);
+            if rps == 0 {
+                return Err(GeoTiffError::Unsupported("zero rows per strip"));
+            }
             Layout::Strips { rows_per_strip: rps }
         };
 
@@ -701,21 +733,33 @@ impl GeoTiff {
                 let chunk_index = ty * tiles_x + tx;
                 let (offset, byte_count) = info.chunks[chunk_index];
                 let raw = (self.fetch)(offset, byte_count as usize)?;
-                let expected = chunk_w
-                    .checked_mul(chunk_h)
+                // Tiles are always stored full-size (padded at the edges); only the
+                // last strip of a stripped image can hold fewer rows than declared.
+                let (data_w, data_h) = match info.layout {
+                    Layout::Strips { .. } => {
+                        (width, chunk_h.min(height.saturating_sub(ty * chunk_h)))
+                    }
+                    Layout::Tiles { .. } => (chunk_w, chunk_h),
+                };
+                if data_w == 0 || data_h == 0 {
+                    continue;
+                }
+                let expected = data_w
+                    .checked_mul(data_h)
                     .and_then(|v| v.checked_mul(bytes_per_sample))
                     .ok_or(GeoTiffError::SizeMismatch("tile dimensions overflow"))?;
                 if expected > MAX_DECODE_BYTES {
                     return Err(GeoTiffError::SizeMismatch("tile exceeds decode size limit"));
                 }
                 let mut decoded = decompress(&raw, info.compression, expected)?;
-
-                let cw = chunk_w.min(width.saturating_sub(tx * chunk_w));
-                let ch = chunk_h.min(height.saturating_sub(ty * chunk_h));
-                if cw == 0 || ch == 0 {
-                    continue;
-                }
-                undo_predictor(info.predictor, &mut decoded, cw, ch, bytes_per_sample)?;
+                undo_predictor(
+                    info.predictor,
+                    &mut decoded,
+                    data_w,
+                    data_h,
+                    bytes_per_sample,
+                    self.little,
+                )?;
 
                 // Which columns/rows of this chunk fall inside the window.
                 let col_lo = x0.max(tx * chunk_w);
@@ -741,7 +785,9 @@ impl GeoTiff {
         }
 
         let transform =
-            info.geo_transform.unwrap_or_else(|| GeoTransform::new(0.0, (y1) as f64, 1.0, 1.0));
+            // Without georeferencing, the default origin is the top of the full image, not
+            // the bottom of this window (which would shift every window's world coords).
+            info.geo_transform.unwrap_or_else(|| GeoTransform::new(0.0, height as f64, 1.0, 1.0));
         // Shift the origin so the window's top-left corner keeps its world
         // position from the full image.
         let transform = shift_transform(transform, x0, y0);
@@ -1081,12 +1127,40 @@ fn decode_packbits(raw: &[u8], expected: usize) -> Result<Vec<u8>> {
 
 /// Undoes the horizontal (2) or floating-point (3) predictor on a decoded
 /// `chunk_w x chunk_h` block of `bytes_per_sample`-wide cells.
+/// Reads an unsigned integer of `bytes.len()` bytes (1..=8) in the given byte order.
+fn read_uint(bytes: &[u8], little: bool) -> u64 {
+    if little {
+        bytes.iter().rev().fold(0u64, |acc, &b| (acc << 8) | u64::from(b))
+    } else {
+        bytes.iter().fold(0u64, |acc, &b| (acc << 8) | u64::from(b))
+    }
+}
+
+/// Writes the low `bytes.len()` bytes of `value` in the given byte order.
+fn write_uint(bytes: &mut [u8], value: u64, little: bool) {
+    let n = bytes.len();
+    for i in 0..n {
+        let byte = (value >> (8 * i)) as u8;
+        if little {
+            bytes[i] = byte;
+        } else {
+            bytes[n - 1 - i] = byte;
+        }
+    }
+}
+
+/// Reverses a TIFF horizontal (2) or floating-point (3) predictor over a
+/// `chunk_w x chunk_h` block of `bytes_per_sample`-byte samples, in file byte order.
+///
+/// `chunk_w` is the row stride of `data`: the full tile width for tiles, and the
+/// image width for strips.
 fn undo_predictor(
     predictor: u16,
     data: &mut [u8],
     chunk_w: usize,
     chunk_h: usize,
     bytes_per_sample: usize,
+    little: bool,
 ) -> Result<()> {
     if predictor == 1 {
         return Ok(());
@@ -1094,31 +1168,39 @@ fn undo_predictor(
     if bytes_per_sample == 0 || data.len() < chunk_w * chunk_h * bytes_per_sample {
         return Err(GeoTiffError::SizeMismatch("predictor block too small"));
     }
-    let row_bytes = chunk_w * bytes_per_sample;
+    let bps = bytes_per_sample;
+    let row_bytes = chunk_w * bps;
     match predictor {
         2 => {
+            // Horizontal differencing on whole samples: carries propagate across bytes,
+            // so 16/32/64-bit samples are added as integers (modulo 2^bits).
             for row in 0..chunk_h {
                 let base = row * row_bytes;
                 for p in 1..chunk_w {
-                    let cur = base + p * bytes_per_sample;
-                    let prev = base + (p - 1) * bytes_per_sample;
-                    for k in 0..bytes_per_sample {
-                        data[cur + k] = data[cur + k].wrapping_add(data[prev + k]);
-                    }
+                    let cur = base + p * bps;
+                    let prev = cur - bps;
+                    let sum = read_uint(&data[cur..cur + bps], little)
+                        .wrapping_add(read_uint(&data[prev..prev + bps], little));
+                    write_uint(&mut data[cur..cur + bps], sum, little);
                 }
             }
             Ok(())
         }
         3 => {
+            // Floating-point predictor (TIFF Technical Note 3). Each row is first
+            // byte-wise running-summed, then stored as byte planes: plane 0 holds the
+            // most significant byte of every sample, and so on.
+            let mut planes = vec![0u8; row_bytes];
             for row in 0..chunk_h {
-                let base = row * row_bytes;
-                for p in 1..chunk_w {
-                    for k in 0..bytes_per_sample {
-                        let cur = base + p * bytes_per_sample + k;
-                        let (src_p, src_k) =
-                            if k == 0 { (p - 1, bytes_per_sample - 1) } else { (p - 1, k - 1) };
-                        let prev = base + src_p * bytes_per_sample + src_k;
-                        data[cur] = data[cur].wrapping_add(data[prev]);
+                let line = &mut data[row * row_bytes..(row + 1) * row_bytes];
+                for i in 1..line.len() {
+                    line[i] = line[i].wrapping_add(line[i - 1]);
+                }
+                planes.copy_from_slice(line);
+                for count in 0..chunk_w {
+                    for byte in 0..bps {
+                        let plane = if little { bps - 1 - byte } else { byte };
+                        line[count * bps + byte] = planes[plane * chunk_w + count];
                     }
                 }
             }
@@ -1490,10 +1572,17 @@ pub mod testsupport {
         let mut ext_offsets = ext_positions.iter().copied();
         for &(tag, tc, count) in external {
             let offset = ext_offsets.next().unwrap();
+            // A single LONG value fits in the entry itself, so it is stored inline
+            // rather than as a pointer to an out-of-line array.
+            let slot = match tag {
+                TAG_TILE_OFFSETS if tile_count == 1 => tile_positions[0] as u32,
+                TAG_TILE_BYTECOUNTS if tile_count == 1 => tile_bytes as u32,
+                _ => offset as u32,
+            };
             out[p..p + 2].copy_from_slice(&tag.to_le_bytes());
             out[p + 2..p + 4].copy_from_slice(&tc.to_le_bytes());
             out[p + 4..p + 8].copy_from_slice(&count.to_le_bytes());
-            out[p + 8..p + 12].copy_from_slice(&(offset as u32).to_le_bytes());
+            out[p + 8..p + 12].copy_from_slice(&slot.to_le_bytes());
             p += 12;
         }
         out[p..p + 4].copy_from_slice(&0u32.to_le_bytes());
@@ -1521,9 +1610,185 @@ mod tests {
     use super::*;
     use crate::cell::CellKind;
 
+    /// Byte offset of the 12-byte IFD entry carrying `tag` in a little-endian fixture
+    /// built by `make_uncompressed_tiff`.
+    fn entry_offset(bytes: &[u8], tag: u16) -> usize {
+        let ifd = u32::from_le_bytes(bytes[4..8].try_into().unwrap()) as usize;
+        let count = u16::from_le_bytes(bytes[ifd..ifd + 2].try_into().unwrap()) as usize;
+        (0..count)
+            .map(|i| ifd + 2 + 12 * i)
+            .find(|&e| u16::from_le_bytes(bytes[e..e + 2].try_into().unwrap()) == tag)
+            .expect("tag present in fixture")
+    }
+
+    /// A 2×3 uncompressed image with RowsPerStrip = 2: the second strip holds a single
+    /// row. Its decode must use the short row count, not the declared rows per strip.
+    /// Without a geotransform, a window's origin must match the full image's origin
+    /// shifted by the window offset. The window here ends above the image bottom.
+    #[test]
+    fn windowed_read_without_geotransform_keeps_world_origin() {
+        let bytes = testsupport::make_uncompressed_tiff();
+        let tiff = GeoTiff::parse(&bytes).unwrap();
+        let full = tiff.read().unwrap();
+        let top = tiff.read_region(0, 0, 0, 2, 1).unwrap();
+        let bottom = tiff.read_region(0, 0, 1, 2, 2).unwrap();
+        let full_origin = full.transform().cell_to_world(0.0, 0.0);
+        assert_eq!(top.transform().cell_to_world(0.0, 0.0), full_origin);
+        assert_eq!(
+            bottom.transform().cell_to_world(0.0, 0.0),
+            full.transform().cell_to_world(0.0, 1.0)
+        );
+    }
+
+    #[test]
+    fn single_tile_cog_decodes_directly() {
+        let bytes = testsupport::make_cog(64, 64, 64, 64, |c, r| ((c + r) % 200) as u8);
+        let band = GeoTiff::parse(&bytes).unwrap().read().unwrap();
+        assert_eq!((band.width(), band.height()), (64, 64));
+    }
+
+    #[test]
+    fn short_last_strip_decodes() {
+        let pixels: [u8; 6] = [1, 2, 3, 4, 5, 6];
+        let entries: [(u16, u16, u32); 7] = [
+            (256, TYPE_SHORT, 2), // width
+            (257, TYPE_SHORT, 3), // height
+            (258, TYPE_SHORT, 8), // bits per sample
+            (259, TYPE_SHORT, 1), // no compression
+            (273, TYPE_LONG, 2),  // strip offsets (placeholder, patched below)
+            (278, TYPE_SHORT, 2), // rows per strip
+            (279, TYPE_LONG, 2),  // strip byte counts
+        ];
+        let ifd_at = 8usize;
+        let arrays_at = ifd_at + 2 + 12 * entries.len() + 4;
+        let offsets_at = arrays_at;
+        let counts_at = offsets_at + 8;
+        let data_at = counts_at + 8;
+        let mut out = Vec::new();
+        out.extend_from_slice(b"II");
+        out.extend_from_slice(&42u16.to_le_bytes());
+        out.extend_from_slice(&(ifd_at as u32).to_le_bytes());
+        out.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+        for &(tag, ty, value) in &entries {
+            out.extend_from_slice(&tag.to_le_bytes());
+            out.extend_from_slice(&ty.to_le_bytes());
+            // The two-element arrays are stored out of line; the single-value tags inline.
+            let count: u32 = if tag == 273 || tag == 279 { 2 } else { 1 };
+            out.extend_from_slice(&count.to_le_bytes());
+            let field = match tag {
+                273 => (offsets_at as u32).to_le_bytes(),
+                279 => (counts_at as u32).to_le_bytes(),
+                _ => value.to_le_bytes(),
+            };
+            out.extend_from_slice(&field);
+        }
+        out.extend_from_slice(&0u32.to_le_bytes()); // next IFD
+                                                    // Strip offsets: strip 0 at data_at (4 bytes), strip 1 at data_at + 4 (2 bytes).
+        out.extend_from_slice(&(data_at as u32).to_le_bytes());
+        out.extend_from_slice(&((data_at + 4) as u32).to_le_bytes());
+        // Strip byte counts: 2 rows × 2 px, then 1 row × 2 px.
+        out.extend_from_slice(&4u32.to_le_bytes());
+        out.extend_from_slice(&2u32.to_le_bytes());
+        out.extend_from_slice(&pixels);
+        assert_eq!(out.len(), data_at + pixels.len());
+
+        let band = GeoTiff::parse(&out).unwrap().read().unwrap();
+        assert_eq!(band.width(), 2);
+        assert_eq!(band.height(), 3);
+    }
+
+    #[test]
+    fn ifd_chain_cycle_is_rejected() {
+        let mut bytes = testsupport::make_uncompressed_tiff();
+        // The fixture's next-IFD pointer sits right after its 7 entries; point it back
+        // at the first IFD.
+        let next_ptr = 8 + 2 + 12 * 7;
+        bytes[next_ptr..next_ptr + 4].copy_from_slice(&8u32.to_le_bytes());
+        assert!(matches!(GeoTiff::parse(&bytes), Err(GeoTiffError::Unsupported(_))));
+    }
+
+    #[test]
+    fn zero_width_is_an_error_not_a_panic() {
+        let mut bytes = testsupport::make_uncompressed_tiff();
+        let e = entry_offset(&bytes, 256) + 8;
+        bytes[e..e + 2].copy_from_slice(&0u16.to_le_bytes());
+        let tiff = GeoTiff::parse(&bytes).unwrap();
+        assert!(tiff.read().is_err());
+    }
+
+    #[test]
+    fn zero_rows_per_strip_is_an_error_not_a_panic() {
+        let mut bytes = testsupport::make_uncompressed_tiff();
+        // Add RowsPerStrip (278) = 0 by overwriting the BitsPerSample entry's tag id is
+        // not possible without changing the entry count, so reuse the tag slot of
+        // PhotometricInterpretation and set it to a zero RowsPerStrip.
+        let e = entry_offset(&bytes, 262);
+        bytes[e..e + 2].copy_from_slice(&278u16.to_le_bytes());
+        bytes[e + 8..e + 12].copy_from_slice(&0u32.to_le_bytes());
+        let tiff = GeoTiff::parse(&bytes).unwrap();
+        assert!(tiff.read().is_err());
+    }
+
+    #[test]
+    fn oversized_tag_value_is_rejected_not_truncated() {
+        let mut bytes = testsupport::make_uncompressed_tiff();
+        // Compression = 65537 would truncate to 1 (uncompressed) with `as u16`. The
+        // entry must be a LONG for the full 32-bit value to be read.
+        let entry = entry_offset(&bytes, 259);
+        bytes[entry + 2..entry + 4].copy_from_slice(&TYPE_LONG.to_le_bytes());
+        bytes[entry + 8..entry + 12].copy_from_slice(&65_537u32.to_le_bytes());
+        let tiff = GeoTiff::parse(&bytes).unwrap();
+        assert!(tiff.read().is_err());
+    }
+
     fn pixels() -> Vec<u8> {
         // A 4x3 ramp with a couple of repeated values to exercise run-length.
         vec![1, 2, 2, 3, 4, 4, 4, 5, 6, 7, 7, 8]
+    }
+
+    /// 16-bit horizontal differencing must carry across the byte boundary. Byte-wise
+    /// addition gets 300 + 65235 wrong.
+    #[test]
+    fn predictor_2_carries_across_bytes_for_16_bit_samples() {
+        let samples: [u16; 4] = [100, 300, 65535, 2];
+        // Encode: first sample as-is, then each sample minus its predecessor (mod 2^16).
+        let mut enc = Vec::new();
+        let mut prev = 0u16;
+        for (i, &s) in samples.iter().enumerate() {
+            let v = if i == 0 { s } else { s.wrapping_sub(prev) };
+            enc.extend_from_slice(&v.to_le_bytes());
+            prev = s;
+        }
+        undo_predictor(2, &mut enc, 4, 1, 2, true).unwrap();
+        let decoded: Vec<u16> =
+            enc.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+        assert_eq!(decoded, samples);
+    }
+
+    /// Floating-point predictor: encode with the forward transform from the TIFF note
+    /// (planes, then byte-wise differencing) and check the decoder inverts it, for both
+    /// byte orders.
+    #[test]
+    fn predictor_3_round_trips_float_rows() {
+        for &little in &[true, false] {
+            let bps = 4;
+            let w = 3;
+            let original: Vec<u8> = (0..(w * bps) as u8).map(|b| b.wrapping_mul(37)).collect();
+            // Forward: split into byte planes (MSB first), then difference bytewise.
+            let mut planes = vec![0u8; w * bps];
+            for count in 0..w {
+                for byte in 0..bps {
+                    let plane = if little { bps - 1 - byte } else { byte };
+                    planes[plane * w + count] = original[count * bps + byte];
+                }
+            }
+            for i in (1..planes.len()).rev() {
+                planes[i] = planes[i].wrapping_sub(planes[i - 1]);
+            }
+            let mut data = planes;
+            undo_predictor(3, &mut data, w, 1, bps, little).unwrap();
+            assert_eq!(data, original, "little = {little}");
+        }
     }
 
     #[test]

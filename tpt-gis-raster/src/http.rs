@@ -41,6 +41,23 @@ const PREFIX: usize = 1 << 20; // 1 MiB
 const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
+/// Maximum redirects followed for one request. Redirects may only lead to http(s).
+const MAX_REDIRECTS: usize = 5;
+
+/// Upper bound on the size of a single metadata fetch (IFDs and tile tables). Growth
+/// doubles the request up to this cap, so a hostile file cannot make us buffer
+/// unbounded metadata.
+const MAX_METADATA_FETCH: usize = 16 << 20;
+
+/// Upper bound on fetch rounds while resolving one metadata parse.
+const MAX_FETCH_ROUNDS: usize = 16;
+
+/// Only plain HTTP(S) URLs are fetched; `file:`, `ftp:` and friends are refused.
+fn scheme_allowed(url: &str) -> bool {
+    let lower = url.get(..8).unwrap_or(url).to_ascii_lowercase();
+    lower.starts_with("https://") || lower.starts_with("http://")
+}
+
 /// Errors from the HTTP COG reader.
 #[derive(Debug)]
 pub enum CogHttpError {
@@ -92,6 +109,8 @@ pub trait RangeTransport: Send + Sync {
 struct HttpTransport {
     client: reqwest::Client,
     url: String,
+    /// Extra headers sent with every request (e.g. authentication).
+    headers: Vec<(String, String)>,
 }
 
 /// Validates an HTTP Range response before its body is buffered.
@@ -126,35 +145,57 @@ impl RangeTransport for HttpTransport {
     fn fetch_range(&self, start: u64, len: usize) -> RangeFetch {
         let client = self.client.clone();
         let url = self.url.clone();
+        let headers = self.headers.clone();
         Box::pin(async move {
             // A zero-length range would make the `end` computation below underflow
             // (`start + len - 1`), so reject it up front.
             if len == 0 {
                 return Err(CogHttpError::Http("requested zero-length range".to_string()));
             }
+            if !scheme_allowed(&url) {
+                return Err(CogHttpError::Http("only http and https URLs are supported".into()));
+            }
             let end = start + len as u64 - 1;
             let range = format!("bytes={start}-{end}");
-            let response = client
-                .get(&url)
-                .header(reqwest::header::RANGE, range)
-                .send()
-                .await
-                .map_err(|e| CogHttpError::Http(e.to_string()))?;
+            let mut request = client.get(&url).header(reqwest::header::RANGE, range);
+            for (name, value) in &headers {
+                request = request.header(name.as_str(), value.as_str());
+            }
+            let mut response =
+                request.send().await.map_err(|e| CogHttpError::Http(e.to_string()))?;
             validate_range_response(response.status(), response.content_length(), len)?;
-            let bytes = response.bytes().await.map_err(|e| CogHttpError::Http(e.to_string()))?;
-            // A misbehaving server must not make us buffer more bytes than we asked
-            // for. Cap the body to the requested length.
-            let truncated = bytes.iter().copied().take(len).collect::<Vec<u8>>();
-            Ok(truncated)
+
+            // Stream the body and stop as soon as it exceeds the requested length, so a
+            // chunked response without Content-Length cannot make us buffer more.
+            let mut body = Vec::with_capacity(len.min(1 << 20));
+            while let Some(chunk) =
+                response.chunk().await.map_err(|e| CogHttpError::Http(e.to_string()))?
+            {
+                if body.len() + chunk.len() > len {
+                    return Err(CogHttpError::Http(format!(
+                        "range response body exceeds the requested {len} bytes"
+                    )));
+                }
+                body.extend_from_slice(&chunk);
+            }
+            Ok(body)
         })
     }
 
     fn content_length(&self) -> RangeSize {
         let client = self.client.clone();
         let url = self.url.clone();
-        Box::pin(
-            async move { client.head(&url).send().await.ok().and_then(|r| r.content_length()) },
-        )
+        let headers = self.headers.clone();
+        Box::pin(async move {
+            if !scheme_allowed(&url) {
+                return None;
+            }
+            let mut request = client.head(&url);
+            for (name, value) in &headers {
+                request = request.header(name.as_str(), value.as_str());
+            }
+            request.send().await.ok().and_then(|r| r.content_length())
+        })
     }
 }
 
@@ -256,23 +297,50 @@ impl RangeCache {
 pub struct CogRangeReader {
     transport: Box<dyn RangeTransport>,
     cache: Arc<Mutex<RangeCache>>,
+    /// Bytes fetched up front; metadata beyond it is fetched on demand.
+    prefix_len: usize,
 }
 
 impl CogRangeReader {
     /// Creates a reader that fetches the COG at `url` over HTTP Range requests.
+    ///
+    /// Only `http`/`https` URLs are accepted, and redirects may only lead to them.
     #[must_use]
     pub fn new(url: impl Into<String>) -> Self {
+        Self::with_headers(url, std::iter::empty::<(String, String)>())
+    }
+
+    /// Like [`CogRangeReader::new`], sending extra headers (for example an
+    /// `Authorization` header) with every request. Invalid header names or values make
+    /// each request fail with an HTTP error.
+    #[must_use]
+    pub fn with_headers<I, K, V>(url: impl Into<String>, headers: I) -> Self
+    where
+        I: IntoIterator<Item = (K, V)>,
+        K: Into<String>,
+        V: Into<String>,
+    {
         let client = reqwest::Client::builder()
             .timeout(REQUEST_TIMEOUT)
             .connect_timeout(CONNECT_TIMEOUT)
+            .redirect(reqwest::redirect::Policy::custom(|attempt| {
+                if attempt.previous().len() >= MAX_REDIRECTS {
+                    attempt.error("too many redirects")
+                } else if !scheme_allowed(attempt.url().as_str()) {
+                    attempt.error("redirect to a non-http(s) URL")
+                } else {
+                    attempt.follow()
+                }
+            }))
             .build()
             .unwrap_or_else(|e| {
-                // A builder with only timeouts cannot fail to configure; fall back
-                // to a default client rather than panicking on the off chance.
+                // A builder with only timeouts and a redirect policy cannot fail to
+                // configure; fall back to a default client rather than panicking.
                 let _ = e;
                 reqwest::Client::new()
             });
-        Self::with_transport(HttpTransport { client, url: url.into() })
+        let headers = headers.into_iter().map(|(k, v)| (k.into(), v.into())).collect();
+        Self::with_transport(HttpTransport { client, url: url.into(), headers })
     }
 
     /// Creates a reader over an arbitrary [`RangeTransport`] (in-memory buffer,
@@ -280,14 +348,29 @@ impl CogRangeReader {
     /// it run against any byte source.
     #[must_use]
     pub fn with_transport(transport: impl RangeTransport + 'static) -> Self {
-        Self { transport: Box::new(transport), cache: Arc::new(Mutex::new(RangeCache::default())) }
+        Self {
+            transport: Box::new(transport),
+            cache: Arc::new(Mutex::new(RangeCache::default())),
+            prefix_len: PREFIX,
+        }
     }
 
-    /// Ensures the leading `PREFIX` bytes (or the whole file if smaller) are
-    /// cached.
+    /// Sets how many leading bytes are fetched up front (test seam).
+    #[cfg(test)]
+    fn with_prefix_len(mut self, len: usize) -> Self {
+        self.prefix_len = len;
+        self
+    }
+
+    /// Caches the leading bytes of the file: the first `prefix_len`, or the whole file
+    /// when it is smaller (so small files work without a full-size read).
     async fn ensure_prefix(&self) -> Result<(), CogHttpError> {
-        let size =
-            self.transport.content_length().await.unwrap_or(PREFIX as u64).min(PREFIX as u64);
+        let size = self
+            .transport
+            .content_length()
+            .await
+            .unwrap_or(self.prefix_len as u64)
+            .min(self.prefix_len as u64);
         let size = size.max(16) as usize;
         let need = !self.cache.lock().unwrap().has_prefix(size);
         if need {
@@ -297,15 +380,53 @@ impl CogRangeReader {
         Ok(())
     }
 
+    /// The file length, or `u64::MAX` when the transport cannot report it.
+    async fn total_len(&self) -> u64 {
+        self.transport.content_length().await.unwrap_or(u64::MAX)
+    }
+
+    /// Runs `op` against the parsed TIFF. Whenever the parser needs bytes that are not
+    /// cached yet (an IFD or tile table beyond the prefix), those bytes are fetched and
+    /// the parse is retried, with the request size doubling up to
+    /// [`MAX_METADATA_FETCH`].
+    async fn with_tiff<T>(
+        &self,
+        total: u64,
+        op: impl Fn(&GeoTiff) -> Result<T, GeoTiffError>,
+    ) -> Result<T, CogHttpError> {
+        let mut want = self.prefix_len.clamp(64, MAX_METADATA_FETCH);
+        for _ in 0..MAX_FETCH_ROUNDS {
+            let cache = Arc::clone(&self.cache);
+            let fetch: Box<dyn Fn(u64, usize) -> Result<Vec<u8>, GeoTiffError> + Send + Sync> =
+                Box::new(move |offset, len| {
+                    cache.lock().unwrap().get(offset, len).ok_or(GeoTiffError::NotFetched(offset))
+                });
+            match GeoTiff::from_fetch(fetch, total).and_then(|tiff| op(&tiff)) {
+                Ok(value) => return Ok(value),
+                Err(GeoTiffError::NotFetched(offset)) => {
+                    let remaining = total.saturating_sub(offset);
+                    let len = (want as u64).min(remaining) as usize;
+                    if len == 0 {
+                        return Err(CogHttpError::Tiff(GeoTiffError::NotFetched(offset)));
+                    }
+                    let data = self.transport.fetch_range(offset, len).await?;
+                    self.cache.lock().unwrap().insert(offset, data);
+                    want = (want * 2).min(MAX_METADATA_FETCH);
+                }
+                Err(e) => return Err(CogHttpError::Tiff(e)),
+            }
+        }
+        Err(CogHttpError::Http("too many fetch rounds while reading TIFF metadata".into()))
+    }
+
     /// Parses the remote COG's layout (size, tiling) after fetching the prefix.
     ///
     /// # Errors
     /// Returns a [`CogHttpError`] if the prefix cannot be fetched or parsed.
     pub async fn layout(&self) -> Result<ImageLayout, CogHttpError> {
         self.ensure_prefix().await?;
-        let prefix = self.cache.lock().unwrap().get(0, PREFIX).unwrap_or_default();
-        let tiff = GeoTiff::parse(&prefix)?;
-        Ok(tiff.layout(0)?)
+        let total = self.total_len().await;
+        self.with_tiff(total, |tiff| tiff.layout(0)).await
     }
 
     /// Reads the entire image, fetching every tile. Prefer
@@ -331,9 +452,8 @@ impl CogRangeReader {
         y1: usize,
     ) -> Result<AnyBand, CogHttpError> {
         self.ensure_prefix().await?;
-        let prefix = self.cache.lock().unwrap().get(0, PREFIX).unwrap_or_default();
-        let tiff = GeoTiff::parse(&prefix)?;
-        let layout = tiff.layout(0)?;
+        let total = self.total_len().await;
+        let layout = self.with_tiff(total, |tiff| tiff.layout(0)).await?;
         if !layout.tiled {
             return Err(CogHttpError::Tiff(GeoTiffError::Unsupported(
                 "image is not tiled; cannot stream by tile",
@@ -345,7 +465,7 @@ impl CogRangeReader {
         let (tx0, ty0, tx1, ty1) = tile_window(x0, y0, x1, y1, tw, th, layout.width, layout.height);
 
         // Fetch exactly the tiles in the window.
-        let chunks = tiff.chunk_table(0)?;
+        let chunks = self.with_tiff(total, |tiff| tiff.chunk_table(0)).await?;
         let tiles_x = layout.width.div_ceil(tw);
         let mut missing: Vec<(u64, u64)> = Vec::new();
         for ty in ty0..ty1 {
@@ -364,15 +484,8 @@ impl CogRangeReader {
             self.cache.lock().unwrap().insert(offset, data);
         }
 
-        // Build a synchronous fetch closure over the cache and run the decoder.
-        let cache = Arc::clone(&self.cache);
-        let fetch: Box<dyn Fn(u64, usize) -> Result<Vec<u8>, GeoTiffError> + Send + Sync> =
-            Box::new(move |offset, len| {
-                cache.lock().unwrap().get(offset, len).ok_or(GeoTiffError::NotFetched(offset))
-            });
-        let total = self.transport.content_length().await.unwrap_or(u64::MAX);
-        let tiff = GeoTiff::from_fetch(fetch, total)?;
-        Ok(tiff.read_region(0, x0, y0, x1, y1)?)
+        let band = self.with_tiff(total, |tiff| tiff.read_region(0, x0, y0, x1, y1)).await?;
+        Ok(band)
     }
 }
 
@@ -439,6 +552,47 @@ mod tests {
             "fetched {total} of {} bytes — that is not a streaming read",
             bytes.len()
         );
+    }
+
+    #[test]
+    fn non_http_urls_are_refused_without_a_request() {
+        assert!(!scheme_allowed("file:///etc/passwd"));
+        assert!(!scheme_allowed("ftp://example.com/a.tif"));
+        assert!(scheme_allowed("https://example.com/a.tif"));
+        assert!(scheme_allowed("HTTP://example.com/a.tif"));
+    }
+
+    /// A tiny file with a 16-byte prefix forces the IFD to be fetched on demand,
+    /// exercising the metadata growth path.
+    #[test]
+    fn metadata_beyond_the_prefix_is_fetched_on_demand() {
+        let width = 512u16;
+        let height = 512u16;
+        let bytes = make_cog(width, height, 256, 256, |c, r| ((c + 3 * r) % 251) as u8);
+        let reader =
+            CogRangeReader::with_transport(MemoryTransport::new(bytes)).with_prefix_len(16);
+        let region = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap()
+            .block_on(reader.read_region(0, 0, 256, 256))
+            .unwrap();
+        assert_eq!((region.width(), region.height()), (256, 256));
+        assert_eq!(region.as_u8().unwrap().get(10, 20), Some((10 + 3 * 20) as u8));
+    }
+
+    /// A file smaller than the prefix must be readable (it used to fail because the
+    /// reader asked for a full-size prefix that was never cached).
+    #[test]
+    fn small_file_smaller_than_the_prefix_reads() {
+        let bytes = make_cog(64, 64, 64, 64, |c, r| ((c + r) % 200) as u8);
+        assert!(bytes.len() < PREFIX);
+        let reader = CogRangeReader::with_transport(MemoryTransport::new(bytes));
+        let region = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap()
+            .block_on(reader.read())
+            .unwrap();
+        assert_eq!((region.width(), region.height()), (64, 64));
     }
 
     #[test]
