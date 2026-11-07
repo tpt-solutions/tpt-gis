@@ -283,7 +283,11 @@ fn run_convert(
     } else {
         std::fs::read(&input).map_err(|e| format!("failed to read {input}: {e}"))?
     };
-    let features = convert::read_features(in_format, &bytes)?;
+    let features = if input == "-" {
+        convert::read_features(in_format, &bytes)?
+    } else {
+        convert::read_file_features(&input, in_format, &bytes)?
+    };
 
     let out_format = match (to.as_deref(), output.as_deref()) {
         (None, None) => convert::Format::GeoJson,
@@ -337,7 +341,7 @@ fn info_json(input: &str) -> Result<Value, String> {
         format!("unsupported file type for '{input}' (supported: .geojson, .json, .wkt, .wkb, .shp, .gpkg)")
     })?;
     let bytes = std::fs::read(input).map_err(|e| format!("failed to read {input}: {e}"))?;
-    let features = convert::read_features(format, &bytes)?;
+    let features = convert::read_file_features(input, format, &bytes)?;
     let summary = convert::summarize(&features);
     let mut json = convert::summary_to_json(format, &summary);
     // A shapefile's coordinate system is stored as WKT in the sibling .prj file.

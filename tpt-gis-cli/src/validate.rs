@@ -10,7 +10,7 @@ use tpt_gis_geom::Polygon as GeomPolygon;
 use tpt_gis_io::geojson::Feature;
 use tpt_gis_io::geometry::{Geometry, Polygon};
 
-use crate::convert::{read_features, Format};
+use crate::convert::Format;
 
 /// One problem found in a file.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -110,7 +110,7 @@ pub fn validate_file(path: &str) -> Result<(Value, Vec<Problem>), String> {
         let format = Format::from_path(path).ok_or_else(|| {
             format!("unsupported file type for '{path}' (supported: .geojson, .json, .wkt, .wkb, .shp, .gpkg, .tif)")
         })?;
-        let features = read_features(format, &bytes)?;
+        let features = crate::convert::read_file_features(path, format, &bytes)?;
         (format.name(), check_features(&features))
     };
     let report = json!({

@@ -23,6 +23,7 @@ use tpt_gis_io::geojson::{
 };
 use tpt_gis_io::geometry::{Geometry, Point};
 use tpt_gis_io::geopackage::{read_gpkg, write_gpkg, WriteOptions};
+use tpt_gis_io::shapefile::{self, DbfEncoding, DbfValue};
 
 /// A supported vector file format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -152,6 +153,62 @@ pub fn write_features(format: Format, features: &[Feature]) -> Result<Vec<u8>, S
                 description: None,
             };
             write_gpkg(features, &opts).map_err(|e| format!("failed to write GeoPackage: {e}"))
+        }
+    }
+}
+
+/// Features from a file already read into `bytes`. For a shapefile, the sibling `.dbf`
+/// supplies each feature's attributes (rows pair with shapes by position) and the sibling
+/// `.cpg` names the encoding of its text fields. Deleted rows are skipped.
+///
+/// # Errors
+/// Returns a message if the `.shp` or `.dbf` is malformed, or if their record counts differ.
+pub fn read_file_features(
+    path: &str,
+    format: Format,
+    bytes: &[u8],
+) -> Result<Vec<Feature>, String> {
+    if format != Format::Shapefile {
+        return read_features(format, bytes);
+    }
+    let geometries =
+        shapefile::read_shp_records(bytes).map_err(|e| format!("invalid shapefile: {e}"))?;
+    let shp = Path::new(path);
+    let Ok(dbf_bytes) = std::fs::read(shp.with_extension("dbf")) else {
+        return Ok(geometries.into_iter().map(|g| feature(g)).collect());
+    };
+    let encoding = std::fs::read_to_string(shp.with_extension("cpg"))
+        .ok()
+        .and_then(|text| shapefile::encoding_from_cpg(&text))
+        .unwrap_or(DbfEncoding::Utf8);
+    let rows =
+        shapefile::read_dbf_with(&dbf_bytes, encoding).map_err(|e| format!("invalid .dbf: {e}"))?;
+    if rows.len() != geometries.len() {
+        return Err(format!(
+            "the .dbf has {} records but the .shp has {}",
+            rows.len(),
+            geometries.len()
+        ));
+    }
+    Ok(geometries
+        .into_iter()
+        .zip(rows)
+        .filter(|(_, row)| !row.is_deleted)
+        .map(|(geometry, row)| Feature {
+            geometry,
+            properties: row.values.into_iter().map(|(name, v)| (name, dbf_to_json(v))).collect(),
+        })
+        .collect())
+}
+
+/// A dBASE field value as JSON. Dates become ISO `YYYY-MM-DD` strings.
+fn dbf_to_json(value: DbfValue) -> Value {
+    match value {
+        DbfValue::Character(s) => Value::String(s),
+        DbfValue::Numeric(n) => serde_json::Number::from_f64(n).map_or(Value::Null, Value::Number),
+        DbfValue::Logical(b) => b.map_or(Value::Null, Value::Bool),
+        DbfValue::Date { year, month, day } => {
+            Value::String(format!("{year:04}-{month:02}-{day:02}"))
         }
     }
 }

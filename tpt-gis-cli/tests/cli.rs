@@ -263,3 +263,83 @@ fn reproject_accepts_an_epsg_code() {
     let text = fs::read_to_string(&output).unwrap();
     assert!(text.contains("1113194"), "{text}");
 }
+
+/// Writes a point shapefile (`.shp`) with the given points, in the layout the reader reads.
+fn point_shapefile(points: &[(f64, f64)]) -> Vec<u8> {
+    let content_bytes = 20; // shape type + x + y
+    let file_words = (100 + points.len() * (8 + content_bytes)) / 2;
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&9994i32.to_be_bytes());
+    bytes.extend_from_slice(&[0u8; 20]);
+    bytes.extend_from_slice(&(file_words as i32).to_be_bytes());
+    bytes.extend_from_slice(&1000i32.to_le_bytes());
+    bytes.extend_from_slice(&1i32.to_le_bytes());
+    bytes.extend_from_slice(&[0u8; 64]);
+    for (i, (x, y)) in points.iter().enumerate() {
+        bytes.extend_from_slice(&((i + 1) as i32).to_be_bytes());
+        bytes.extend_from_slice(&((content_bytes / 2) as i32).to_be_bytes());
+        bytes.extend_from_slice(&1i32.to_le_bytes());
+        bytes.extend_from_slice(&x.to_le_bytes());
+        bytes.extend_from_slice(&y.to_le_bytes());
+    }
+    bytes
+}
+
+/// Writes a dBASE file with one character field `NAME` (16 bytes), one row per value.
+fn name_dbase(names: &[&[u8]]) -> Vec<u8> {
+    let field_len = 16usize;
+    let header_len = 32 + 32 + 1;
+    let record_len = 1 + field_len;
+    let mut bytes = vec![0x03, 0, 0, 0];
+    bytes.extend_from_slice(&(names.len() as u32).to_le_bytes());
+    bytes.extend_from_slice(&(header_len as u16).to_le_bytes());
+    bytes.extend_from_slice(&(record_len as u16).to_le_bytes());
+    bytes.extend_from_slice(&[0u8; 20]);
+    let mut name = [0u8; 11];
+    name[..4].copy_from_slice(b"NAME");
+    bytes.extend_from_slice(&name);
+    bytes.push(b'C');
+    bytes.extend_from_slice(&[0u8; 4]);
+    bytes.push(field_len as u8);
+    bytes.push(0);
+    bytes.extend_from_slice(&[0u8; 14]);
+    bytes.push(0x0D);
+    for value in names {
+        bytes.push(b' ');
+        let mut field = vec![b' '; field_len];
+        field[..value.len()].copy_from_slice(value);
+        bytes.extend_from_slice(&field);
+    }
+    bytes
+}
+
+/// Attributes come from the sibling `.dbf`, decoded with the `.cpg` encoding, and are
+/// paired with the shapes by row.
+#[test]
+fn convert_carries_dbf_attributes_decoded_with_cpg() {
+    let dir = scratch("shp-attrs");
+    let shp = dir.join("cities.shp");
+    let out = dir.join("cities.geojson");
+    fs::write(&shp, point_shapefile(&[(1.0, 2.0), (3.0, 4.0)])).unwrap();
+    // "Zoë" in Windows-1252: ë is 0xEB. The second row is plain ASCII.
+    fs::write(dir.join("cities.dbf"), name_dbase(&[b"Zo\xEB", b"Oslo"])).unwrap();
+    fs::write(dir.join("cities.cpg"), "CP1252\n").unwrap();
+
+    run_with_args(args(&["convert", "--input", &path_str(&shp), "--output", &path_str(&out)]))
+        .expect("convert succeeds");
+
+    let json: serde_json::Value = serde_json::from_str(&fs::read_to_string(&out).unwrap()).unwrap();
+    let features = json["features"].as_array().unwrap();
+    assert_eq!(features[0]["properties"]["NAME"], "Zo\u{eb}");
+    assert_eq!(features[1]["properties"]["NAME"], "Oslo");
+}
+
+#[test]
+fn mismatched_dbf_row_count_is_an_error() {
+    let dir = scratch("shp-mismatch");
+    let shp = dir.join("cities.shp");
+    fs::write(&shp, point_shapefile(&[(1.0, 2.0), (3.0, 4.0)])).unwrap();
+    fs::write(dir.join("cities.dbf"), name_dbase(&[b"only one"])).unwrap();
+    let err = run_with_args(args(&["info", &path_str(&shp)])).unwrap_err();
+    assert!(err.contains("1 records") && err.contains("2"), "{err}");
+}
