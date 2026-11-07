@@ -80,10 +80,37 @@ dicts mapping each field name to a Python value (`str`, `float`, `Optional[bool]
 an ISO `YYYY-MM-DD` date string). See `tpt-gis-io`'s shapefile module for the full
 scope notes (Z/M shapes and multi-exterior polygons are not supported).
 
+### Geometry properties, equality, and pickling
+
+```python
+geom = gis.Geometry.from_wkt("POLYGON ((0 0, 10 0, 10 10, 0 10, 0 0))")
+geom.bounds          # (0.0, 0.0, 10.0, 10.0)
+geom.area            # 100.0 (planar; holes subtracted)
+geom.length          # 40.0 (perimeter for polygons, path length for lines)
+geom.__geo_interface__   # {"type": "Polygon", "coordinates": [...]}
+geom == gis.Geometry.from_wkt("POLYGON ((0 0, 10 0, 10 10, 0 10, 0 0))")  # True
+pickle.loads(pickle.dumps(geom)) == geom                                   # True
+```
+
+Geometries, points, and geo-points compare by value and hash consistently, so they
+work in sets and as dict keys. Pickling uses WKB, or the constructor's arguments for
+points.
+
+### Errors
+
+All errors subclass `tpt_gis_py.TptGisError`, which subclasses `ValueError`, so
+existing `except ValueError` code keeps working:
+
+- `GeometryParseError`: a WKT, WKB, GeoJSON, shapefile, or DBF input could not be parsed.
+- `GeodesyError`: invalid coordinates (NaN, infinite, or latitude outside ±90°), or a
+  nearly antipodal inverse problem that did not converge.
+
 ## Current scope (v0.1)
 
-In scope: `Geometry` WKT/WKB/GeoJSON round-trip + `contains_point`, shapefile
-reading, and `GeoPoint`/geodesic distance on WGS84/GRS80.
+In scope: `Geometry` WKT/WKB/GeoJSON round-trip, `contains_point`, bounds, area, length,
+`__geo_interface__`, equality, and pickling; shapefile reading; `GeoPoint`/geodesic
+distance and destination on WGS84/GRS80; type stubs (`py.typed`) checked against the
+extension by `mypy.stubtest` in CI.
 
 Deferred (not in v0.1): raster/COG access, the spatial-index crate, GeoPackage,
 coordinate projections, and NumPy interop.
