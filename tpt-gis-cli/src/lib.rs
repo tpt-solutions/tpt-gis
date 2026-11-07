@@ -326,28 +326,38 @@ fn run_validate(input: &str) -> Result<(), String> {
     }
 }
 
-fn run_info(input: String) -> Result<(), String> {
+/// The JSON summary `info` prints for a file.
+fn info_json(input: &str) -> Result<Value, String> {
     if input.to_ascii_lowercase().ends_with(".tif") || input.to_ascii_lowercase().ends_with(".tiff")
     {
-        let bytes = std::fs::read(&input).map_err(|e| format!("failed to read {input}: {e}"))?;
-        let json = raster_summary(&bytes)?;
-        let text = serde_json::to_string_pretty(&json)
-            .map_err(|e| format!("failed to render JSON: {e}"))?;
-        return write_stdout(&format!(
-            "{text}
-"
-        ));
+        let bytes = std::fs::read(input).map_err(|e| format!("failed to read {input}: {e}"))?;
+        return raster_summary(&bytes);
     }
-    let format = convert::Format::from_path(&input).ok_or_else(|| {
+    let format = convert::Format::from_path(input).ok_or_else(|| {
         format!("unsupported file type for '{input}' (supported: .geojson, .json, .wkt, .wkb, .shp, .gpkg)")
     })?;
-    let bytes = std::fs::read(&input).map_err(|e| format!("failed to read {input}: {e}"))?;
+    let bytes = std::fs::read(input).map_err(|e| format!("failed to read {input}: {e}"))?;
     let features = convert::read_features(format, &bytes)?;
     let summary = convert::summarize(&features);
-    let json = convert::summary_to_json(format, &summary);
+    let mut json = convert::summary_to_json(format, &summary);
+    // A shapefile's coordinate system is stored as WKT in the sibling .prj file.
+    if format == convert::Format::Shapefile {
+        if let Ok(prj) = std::fs::read_to_string(std::path::Path::new(input).with_extension("prj"))
+        {
+            json["projection_wkt"] = Value::String(prj.trim().to_string());
+        }
+    }
+    Ok(json)
+}
+
+fn run_info(input: String) -> Result<(), String> {
+    let json = info_json(&input)?;
     let text =
         serde_json::to_string_pretty(&json).map_err(|e| format!("failed to render JSON: {e}"))?;
-    write_stdout(&format!("{text}\n"))
+    write_stdout(&format!(
+        "{text}
+"
+    ))
 }
 
 fn run_spatial_join(
@@ -610,6 +620,38 @@ fn write_csv(results: &[SpatialJoinResult]) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `info` reads the sibling .prj as the shapefile's projection.
+    #[test]
+    fn info_reports_the_projection_of_a_shapefile() {
+        let dir = std::env::temp_dir().join(format!("tptgis-prj-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let shp = dir.join("point.shp");
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&9994i32.to_be_bytes());
+        bytes.extend_from_slice(&[0u8; 20]);
+        bytes.extend_from_slice(&64i32.to_be_bytes()); // file length: 128 bytes, in words
+        bytes.extend_from_slice(&1000i32.to_le_bytes());
+        bytes.extend_from_slice(&1i32.to_le_bytes()); // shape type: point
+        bytes.extend_from_slice(&[0u8; 64]); // bounding box, unused by the reader
+        bytes.extend_from_slice(&1i32.to_be_bytes()); // record number
+        bytes.extend_from_slice(&10i32.to_be_bytes()); // content length, in words
+        bytes.extend_from_slice(&1i32.to_le_bytes());
+        bytes.extend_from_slice(&30.0f64.to_le_bytes());
+        bytes.extend_from_slice(&10.0f64.to_le_bytes());
+        std::fs::write(&shp, bytes).unwrap();
+        std::fs::write(
+            dir.join("point.prj"),
+            "GEOGCS[\"GCS_WGS_1984\"]
+",
+        )
+        .unwrap();
+
+        let json = info_json(shp.to_str().unwrap()).unwrap();
+        assert_eq!(json["projection_wkt"], "GEOGCS[\"GCS_WGS_1984\"]");
+        assert_eq!(json["features"], 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn parse_crs_accepts_valid_utm_zones() {

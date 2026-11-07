@@ -84,6 +84,8 @@ tptgis info <file>
 Prints a JSON object with the format, feature count, features without geometry,
 geometry-type counts, the bounding box `[min_x, min_y, max_x, max_y]`, and the
 property names found across all features.
+For a shapefile, `projection_wkt` holds the contents of the sibling `.prj` file when it
+exists.
 
 For a GeoTIFF (`.tif`, `.tiff`), it reports the image size, cell type, EPSG code,
 origin and pixel size, and whether the image is tiled (with the tile size).
