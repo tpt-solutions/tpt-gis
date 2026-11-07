@@ -1,13 +1,13 @@
 //! MVP 1: Planetary-Scale Spatial Join Engine — CLI library.
 //!
-//! Provides three subcommands (exposed through the `tptgis` binary):
-//! - `spatial-join`: Reads points and polygons from GeoJSON files, runs an
-//!   R-Tree-accelerated points-in-polygons spatial join, and writes the matches
-//!   as a GeoJSON `FeatureCollection` (or CSV).
-//! - `reproject`: Reads a GeoJSON `FeatureCollection` and reprojects all
-//!   coordinates from WGS84 to a supported target CRS.
-//! - `generate-fixtures`: Writes synthetic GeoJSON test fixtures (points and
-//!   polygons) for benchmarking and development.
+//! Subcommands (exposed through the `tptgis` binary):
+//! - `spatial-join`: points-in-polygons join (holes and multi-part geometries
+//!   honoured), written as GeoJSON or CSV.
+//! - `reproject`: reprojects a GeoJSON file from WGS84 to a supported CRS.
+//! - `convert`: converts between GeoJSON, WKT, WKB, Shapefile, and GeoPackage.
+//! - `info`: prints a JSON summary of a vector file.
+//! - `geofence-compile`: emits a `no_std`-friendly Rust module of polygon data.
+//! - `generate-fixtures`: writes synthetic GeoJSON test fixtures for benchmarking.
 
 use clap::{Parser, Subcommand};
 use serde_json::Map;
@@ -22,7 +22,9 @@ use tpt_gis_io::geojson::{
 };
 use tpt_gis_io::geometry::{Geometry, Point, Polygon};
 
+mod convert;
 mod csv;
+mod geofence;
 pub mod rng;
 use crate::rng::SmallRng;
 
@@ -35,6 +37,15 @@ type SpatialJoinResult = JoinResult<Payload, Payload>;
 struct Cli {
     #[command(subcommand)]
     command: Commands,
+}
+
+/// Output encodings for `spatial-join`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum OutputFormat {
+    /// GeoJSON FeatureCollection (default).
+    Geojson,
+    /// Comma-separated values.
+    Csv,
 }
 
 #[derive(Subcommand, Debug)]
@@ -54,8 +65,8 @@ enum Commands {
         output: Option<String>,
 
         /// Output format: geojson (default) or csv.
-        #[arg(long, default_value = "geojson")]
-        format: String,
+        #[arg(long, value_enum, default_value_t = OutputFormat::Geojson)]
+        format: OutputFormat,
 
         /// Use incremental R-Tree insert instead of bulk loading.
         #[arg(long)]
@@ -72,6 +83,41 @@ enum Commands {
         crs: String,
 
         /// Output file path. Defaults to stdout if omitted.
+        #[arg(long, short)]
+        output: Option<String>,
+    },
+    /// Convert a vector file between formats (GeoJSON, WKT, WKB, Shapefile, GeoPackage).
+    Convert {
+        /// Input file, or `-` to read stdin (then `--from` is required).
+        #[arg(long)]
+        input: String,
+
+        /// Output file. Defaults to stdout if omitted.
+        #[arg(long, short)]
+        output: Option<String>,
+
+        /// Input format (geojson, wkt, wkb, shp, gpkg). Default: from the input extension.
+        #[arg(long)]
+        from: Option<String>,
+
+        /// Output format. Default: from the output extension, else GeoJSON.
+        #[arg(long)]
+        to: Option<String>,
+    },
+    /// Print a JSON summary of a vector file: feature count, geometry types, bounds,
+    /// and property names.
+    Info {
+        /// Input file.
+        input: String,
+    },
+    /// Compile GeoJSON polygons into a `no_std`-friendly Rust module of const data
+    /// (bounding boxes, exterior rings, and holes) for embedded geofence checks.
+    GeofenceCompile {
+        /// GeoJSON FeatureCollection of polygons (a `name` property names each zone).
+        #[arg(long)]
+        input: String,
+
+        /// Output `.rs` file. Defaults to stdout if omitted.
         #[arg(long, short)]
         output: Option<String>,
     },
@@ -116,7 +162,20 @@ where
     I: IntoIterator<Item = T>,
     T: Into<std::ffi::OsString> + Clone,
 {
-    let cli = Cli::parse_from(args);
+    // `try_parse_from` rather than `parse_from`: the latter exits the process on bad
+    // arguments, which would make the function untestable and unsuitable for embedding.
+    let cli = match Cli::try_parse_from(args) {
+        Ok(cli) => cli,
+        Err(e) if e.use_stderr() => {
+            let message = e.to_string();
+            return Err(message.strip_prefix("error: ").unwrap_or(&message).trim_end().to_string());
+        }
+        Err(e) => {
+            // Help and version output go to stdout and count as success.
+            let _ = e.print();
+            return Ok(());
+        }
+    };
     match cli.command {
         Commands::SpatialJoin { points, polygons, output, format, incremental } => {
             run_spatial_join(points, polygons, output, format, incremental)
@@ -125,14 +184,106 @@ where
         Commands::GenerateFixtures { points, polygons, seed, output } => {
             run_generate_fixtures(points, polygons, seed, output)
         }
+        Commands::Convert { input, output, from, to } => run_convert(input, output, from, to),
+        Commands::Info { input } => run_info(input),
+        Commands::GeofenceCompile { input, output } => run_geofence_compile(input, output),
     }
+}
+
+/// Writes `text` to stdout, treating a closed pipe (e.g. `tptgis ... | head`) as a
+/// normal end of output rather than a panic.
+fn write_stdout(text: &str) -> Result<(), String> {
+    write_stdout_bytes(text.as_bytes())
+}
+
+fn write_stdout_bytes(bytes: &[u8]) -> Result<(), String> {
+    use std::io::Write;
+    let mut out = std::io::stdout().lock();
+    match out.write_all(bytes).and_then(|()| out.flush()) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
+        Err(e) => Err(format!("failed to write to stdout: {e}")),
+    }
+}
+
+/// Resolves a format from an explicit name, else from a path's extension.
+fn resolve_format(
+    name: Option<&str>,
+    path: Option<&str>,
+    what: &str,
+) -> Result<convert::Format, String> {
+    match (name, path) {
+        (Some(n), _) => convert::Format::from_name(n).ok_or_else(|| {
+            format!("unknown {what} format '{n}' (use geojson, wkt, wkb, shp, gpkg)")
+        }),
+        (None, Some(p)) if p != "-" => convert::Format::from_path(p).ok_or_else(|| {
+            format!("cannot infer the {what} format from '{p}'; pass --{what} explicitly")
+        }),
+        _ => Err(format!("pass --{what} to name the {what} format")),
+    }
+}
+
+fn run_convert(
+    input: String,
+    output: Option<String>,
+    from: Option<String>,
+    to: Option<String>,
+) -> Result<(), String> {
+    let in_format = resolve_format(from.as_deref(), Some(&input), "from")?;
+    let bytes = if input == "-" {
+        use std::io::Read;
+        let mut buf = Vec::new();
+        std::io::stdin().read_to_end(&mut buf).map_err(|e| format!("failed to read stdin: {e}"))?;
+        buf
+    } else {
+        std::fs::read(&input).map_err(|e| format!("failed to read {input}: {e}"))?
+    };
+    let features = convert::read_features(in_format, &bytes)?;
+
+    let out_format = match (to.as_deref(), output.as_deref()) {
+        (None, None) => convert::Format::GeoJson,
+        _ => resolve_format(to.as_deref(), output.as_deref(), "to")?,
+    };
+    let encoded = convert::write_features(out_format, &features)?;
+    match output.as_deref() {
+        Some(path) if path != "-" => {
+            std::fs::write(path, &encoded).map_err(|e| format!("failed to write {path}: {e}"))
+        }
+        _ => write_stdout_bytes(&encoded),
+    }
+}
+
+fn run_geofence_compile(input: String, output: Option<String>) -> Result<(), String> {
+    let text =
+        std::fs::read_to_string(&input).map_err(|e| format!("failed to read {input}: {e}"))?;
+    let fc = parse_feature_collection(&text).map_err(|e| format!("invalid GeoJSON: {e}"))?;
+    let source = geofence::generate(&fc.features)?;
+    match output.as_deref() {
+        Some(path) if path != "-" => {
+            std::fs::write(path, source).map_err(|e| format!("failed to write {path}: {e}"))
+        }
+        _ => write_stdout(&source),
+    }
+}
+
+fn run_info(input: String) -> Result<(), String> {
+    let format = convert::Format::from_path(&input).ok_or_else(|| {
+        format!("unsupported file type for '{input}' (supported: .geojson, .json, .wkt, .wkb, .shp, .gpkg)")
+    })?;
+    let bytes = std::fs::read(&input).map_err(|e| format!("failed to read {input}: {e}"))?;
+    let features = convert::read_features(format, &bytes)?;
+    let summary = convert::summarize(&features);
+    let json = convert::summary_to_json(format, &summary);
+    let text =
+        serde_json::to_string_pretty(&json).map_err(|e| format!("failed to render JSON: {e}"))?;
+    write_stdout(&format!("{text}\n"))
 }
 
 fn run_spatial_join(
     points_path: String,
     polygons_path: String,
     output: Option<String>,
-    format: String,
+    format: OutputFormat,
     incremental: bool,
 ) -> Result<(), String> {
     let points_json = std::fs::read_to_string(&points_path)
@@ -148,25 +299,32 @@ fn run_spatial_join(
     let points: Vec<IndexedPoint<Map<String, Value>>> = points_fc
         .features
         .into_iter()
-        .filter_map(|f| {
-            f.geometry.and_then(|g| match g {
-                Geometry::Point(p) => Some(IndexedPoint { point: p, payload: f.properties }),
-                _ => None,
-            })
+        .flat_map(|f| {
+            let coords: Vec<Point> = match f.geometry {
+                Some(Geometry::Point(p)) => vec![p],
+                Some(Geometry::MultiPoint(ps)) => ps,
+                _ => Vec::new(),
+            };
+            let payload = f.properties;
+            coords.into_iter().map(move |point| IndexedPoint { point, payload: payload.clone() })
         })
         .collect();
 
+    // Holes are kept (the whole polygon is indexed, not just its exterior ring), and
+    // each part of a MultiPolygon is joined separately under the feature's payload.
     let polygons: Vec<IndexedPolygon<Map<String, Value>>> = polygons_fc
         .features
         .into_iter()
-        .filter_map(|f| {
-            f.geometry.and_then(|g| match g {
-                Geometry::Polygon(p) => Some(IndexedPolygon {
-                    polygon: Polygon::from_exterior(p.rings[0].clone()),
-                    payload: f.properties,
-                }),
-                _ => None,
-            })
+        .flat_map(|f| {
+            let parts: Vec<Polygon> = match f.geometry {
+                Some(Geometry::Polygon(p)) => vec![p],
+                Some(Geometry::MultiPolygon(ps)) => ps,
+                _ => Vec::new(),
+            };
+            let payload = f.properties;
+            parts
+                .into_iter()
+                .map(move |polygon| IndexedPolygon { polygon, payload: payload.clone() })
         })
         .collect();
 
@@ -174,15 +332,15 @@ fn run_spatial_join(
 
     let results = spatial_join(&points, &polygons, config);
 
-    let output_text = match format.as_str() {
-        "csv" => write_csv(&results)?,
-        _ => write_geojson(&results),
+    let output_text = match format {
+        OutputFormat::Csv => write_csv(&results)?,
+        OutputFormat::Geojson => write_geojson(&results),
     };
 
     match &output {
         Some(path) => std::fs::write(path, output_text)
             .map_err(|e| format!("failed to write output file: {e}"))?,
-        None => print!("{output_text}"),
+        None => write_stdout(&output_text)?,
     }
     Ok(())
 }
@@ -266,7 +424,7 @@ fn run_reproject(input_path: String, crs: String, output: Option<String>) -> Res
         Some(path) => {
             std::fs::write(path, text).map_err(|e| format!("failed to write output file: {e}"))?
         }
-        None => print!("{text}"),
+        None => write_stdout(&text)?,
     }
     Ok(())
 }
@@ -285,52 +443,49 @@ fn parse_crs(s: &str) -> Result<Crs, String> {
                     "invalid UTM zone; append 'n' or 's' (e.g. utm-18n, utm-33s)".to_string()
                 );
             };
-            Ok(Crs::Utm(Zone::new(num, hem)))
+            let zone = Zone::try_new(num, hem)
+                .ok_or_else(|| format!("UTM zone must be between 1 and 60, got {num}"))?;
+            Ok(Crs::Utm(zone))
         }
-        _ => Err("unsupported target CRS: {s} (supported: web-mercator, utm-18n, utm-33s, ...)"
-            .to_string()),
+        _ => Err(format!(
+            "unsupported target CRS: {s} (supported: web-mercator, utm-18n, utm-33s, ...)"
+        )),
     }
 }
 
+/// Projects one WGS84 `(lon, lat)` point (stored as `x = lon`, `y = lat`) into `target`.
+fn project_point(p: Point, target: Crs) -> Point {
+    let projected = project_forward(GeoPoint::new(p.y, p.x), target);
+    let PlanarPoint { x, y } = projected;
+    Point::new(x, y)
+}
+
+fn project_points(points: Vec<Point>, target: Crs) -> Vec<Point> {
+    points.into_iter().map(|p| project_point(p, target)).collect()
+}
+
+/// Reprojects every coordinate of `geometry`, including each part of multi-part
+/// geometries and nested collections.
 fn reproject_geometry(geometry: Geometry, target: Crs) -> Geometry {
     match geometry {
-        Geometry::Point(p) => {
-            let geo = GeoPoint::new(p.y, p.x);
-            let projected = project_forward(geo, target);
-            let PlanarPoint { x, y } = projected;
-            Geometry::Point(Point::new(x, y))
-        }
-        Geometry::LineString(pts) => {
-            let pts = pts
-                .into_iter()
-                .map(|p| {
-                    let geo = GeoPoint::new(p.y, p.x);
-                    let projected = project_forward(geo, target);
-                    let PlanarPoint { x, y } = projected;
-                    Point::new(x, y)
-                })
-                .collect();
-            Geometry::LineString(pts)
-        }
-        Geometry::Polygon(poly) => {
-            let rings = poly
-                .rings
-                .into_iter()
-                .map(|ring| {
-                    ring.into_iter()
-                        .map(|p| {
-                            let geo = GeoPoint::new(p.y, p.x);
-                            let projected = project_forward(geo, target);
-                            let PlanarPoint { x, y } = projected;
-                            Point::new(x, y)
-                        })
-                        .collect()
-                })
-                .collect();
-            Geometry::Polygon(Polygon { rings })
-        }
-        other => other,
+        Geometry::Point(p) => Geometry::Point(project_point(p, target)),
+        Geometry::LineString(pts) => Geometry::LineString(project_points(pts, target)),
+        Geometry::Polygon(poly) => Geometry::Polygon(reproject_polygon(poly, target)),
+        Geometry::MultiPoint(pts) => Geometry::MultiPoint(project_points(pts, target)),
+        Geometry::MultiLineString(lines) => Geometry::MultiLineString(
+            lines.into_iter().map(|l| project_points(l, target)).collect(),
+        ),
+        Geometry::MultiPolygon(polys) => Geometry::MultiPolygon(
+            polys.into_iter().map(|p| reproject_polygon(p, target)).collect(),
+        ),
+        Geometry::GeometryCollection(items) => Geometry::GeometryCollection(
+            items.into_iter().map(|g| reproject_geometry(g, target)).collect(),
+        ),
     }
+}
+
+fn reproject_polygon(poly: Polygon, target: Crs) -> Polygon {
+    Polygon { rings: poly.rings.into_iter().map(|ring| project_points(ring, target)).collect() }
 }
 
 fn project_forward(geo: GeoPoint, target: Crs) -> PlanarPoint {
@@ -370,4 +525,44 @@ fn write_csv(results: &[SpatialJoinResult]) -> Result<String, String> {
     }
     let bytes = wtr.into_inner().map_err(|e| format!("failed to finalize csv output: {e}"))?;
     String::from_utf8(bytes).map_err(|e| format!("csv output is not valid utf8: {e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_crs_accepts_valid_utm_zones() {
+        assert!(matches!(parse_crs("utm-18n"), Ok(Crs::Utm(_))));
+        assert!(matches!(parse_crs("utm-33s"), Ok(Crs::Utm(_))));
+    }
+
+    /// Zone 61 used to be accepted unchecked; it must be an error naming the zone.
+    #[test]
+    fn parse_crs_rejects_out_of_range_zone() {
+        let err = parse_crs("utm-61n").unwrap_err();
+        assert!(err.contains("61"), "{err}");
+    }
+
+    /// The unsupported-CRS message must interpolate the offending value.
+    /// Multi-part geometries used to pass through unprojected.
+    #[test]
+    fn reproject_projects_every_part_of_multi_geometries() {
+        let input = Geometry::MultiPoint(vec![Point::new(0.0, 0.0), Point::new(10.0, 5.0)]);
+        let out = reproject_geometry(input.clone(), Crs::WebMercator);
+        match out {
+            Geometry::MultiPoint(pts) => {
+                assert_eq!(pts.len(), 2);
+                assert!(pts[1].x.abs() > 1.0e5, "x not projected: {:?}", pts[1]);
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+        assert_ne!(reproject_geometry(input, Crs::WebMercator), Geometry::MultiPoint(vec![]));
+    }
+
+    #[test]
+    fn parse_crs_error_names_the_input() {
+        let err = parse_crs("epsg-9999").unwrap_err();
+        assert!(err.contains("epsg-9999"), "{err}");
+    }
 }
