@@ -27,10 +27,10 @@
 //!   (it will be read as one polygon with extra "holes" rather than a `MultiPolygon`).
 //!   A future pass adding winding-order-aware grouping should replace this function.
 //!
-//! Z/M-flavored shape types (`PointZ`, `PolyLineZ`, `PolygonZ`, `MultiPointZ`, and the
-//! `*M` variants) are not supported; [`read_shp`] returns
-//! [`ShapefileError::UnsupportedShapeType`] rather than misinterpret their trailing
-//! Z/M arrays as more X/Y points.
+//! Z and M shape types (`PointZ`, `PolyLineZ`, `PolygonZ`, `MultiPointZ`, and the `*M`
+//! variants) are read as their 2D counterparts. Their Z and M values are dropped, and
+//! the record length bounds each read, so the trailing arrays are never mistaken for
+//! coordinates.
 
 use core::fmt;
 
@@ -94,6 +94,18 @@ mod shape_type {
     pub(super) const POLYLINE: i32 = 3;
     pub(super) const POLYGON: i32 = 5;
     pub(super) const MULTIPOINT: i32 = 8;
+}
+
+/// The 2D shape type a record's type code reads as. Z (`11`, `13`, `15`, `18`) and M
+/// (`21`, `23`, `25`, `28`) variants read as their 2D counterpart.
+fn base_shape_type(code: i32) -> i32 {
+    match code {
+        11 | 21 => shape_type::POINT,
+        13 | 23 => shape_type::POLYLINE,
+        15 | 25 => shape_type::POLYGON,
+        18 | 28 => shape_type::MULTIPOINT,
+        other => other,
+    }
 }
 
 /// A small cursor over a byte slice, tracking a read position.
@@ -293,7 +305,7 @@ pub fn read_shp(bytes: &[u8]) -> Result<Vec<Geometry>, ShapefileError> {
 
         let record_bytes = cursor.take(content_bytes)?;
         let mut record = Cursor::new(record_bytes);
-        let shape_type = record.i32_le()?;
+        let shape_type = base_shape_type(record.i32_le()?);
 
         let geometry = match shape_type {
             shape_type::NULL => None,
@@ -589,7 +601,7 @@ fn read_next_shp_record(cursor: &mut Cursor<'_>) -> Result<Option<Geometry>, Sha
         .ok_or(ShapefileError::UnexpectedEndOfInput)?;
     let record_bytes = cursor.take(content_bytes)?;
     let mut record = Cursor::new(record_bytes);
-    let shape_type = record.i32_le()?;
+    let shape_type = base_shape_type(record.i32_le()?);
     let geometry = match shape_type {
         shape_type::NULL => None,
         shape_type::POINT => Some(Geometry::Point(read_xy(&mut record)?)),
@@ -754,12 +766,29 @@ mod tests {
 
     #[test]
     fn rejects_unsupported_shape_type() {
-        let mut bytes = shp_header(11);
-        let content = 11i32.to_le_bytes();
+        let mut bytes = shp_header(99);
+        let content = 99i32.to_le_bytes();
         push_record(&mut bytes, 1, &content);
 
         let result = read_shp(&bytes);
-        assert!(matches!(result, Err(ShapefileError::UnsupportedShapeType(11))));
+        assert!(matches!(result, Err(ShapefileError::UnsupportedShapeType(99))));
+    }
+
+    /// PointZ (11) and PointM (21) read as 2D points: the Z or M values are dropped.
+    #[test]
+    fn reads_z_and_m_points_as_2d() {
+        for code in [11i32, 21] {
+            let mut bytes = shp_header(code);
+            let mut content = Vec::new();
+            content.extend_from_slice(&code.to_le_bytes());
+            content.extend_from_slice(&12.5f64.to_le_bytes());
+            content.extend_from_slice(&(-34.25f64).to_le_bytes());
+            content.extend_from_slice(&7.0f64.to_le_bytes()); // Z or M
+            content.extend_from_slice(&8.0f64.to_le_bytes()); // M, if present
+            push_record(&mut bytes, 1, &content);
+            let geometries = read_shp(&bytes).unwrap();
+            assert_eq!(geometries, vec![Geometry::Point(Point::new(12.5, -34.25))], "code {code}");
+        }
     }
 
     #[test]
