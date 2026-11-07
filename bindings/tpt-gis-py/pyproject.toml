@@ -12,9 +12,18 @@ authors = [{ name = "TPT Solutions" }]
 readme = "README.md"
 keywords = ["gis", "geojson", "wkb", "wkt", "shapefile", "geodesy", "geo"]
 classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Rust",
     "Programming Language :: Python :: Implementation :: CPython",
     "Topic :: Scientific/Engineering :: GIS",
+    "Typing :: Typed",
 ]
 
 [project.urls]

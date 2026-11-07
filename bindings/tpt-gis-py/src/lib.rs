@@ -405,17 +405,27 @@ fn geodesic_destination(
 
 /// Reads every geometry record from a `.shp` file (the `.shx` index file is not needed).
 #[pyfunction]
-fn read_shapefile_geometry(path: &str) -> PyResult<Vec<Geometry>> {
-    let bytes = std::fs::read(path).map_err(|e| PyIOError::new_err(e.to_string()))?;
-    let geoms = tpt_gis_io::shapefile::read_shp(&bytes).map_err(to_pyerr)?;
+fn read_shapefile_geometry(py: Python<'_>, path: &str) -> PyResult<Vec<Geometry>> {
+    // Release the GIL for the file read and the parse, so other Python threads run.
+    let geoms = py.allow_threads(|| -> Result<_, PyErr> {
+        let bytes = std::fs::read(path).map_err(|e| PyIOError::new_err(e.to_string()))?;
+        tpt_gis_io::shapefile::read_shp(&bytes).map_err(to_pyerr)
+    })?;
     Ok(geoms.into_iter().map(Geometry).collect())
 }
 
 /// Reads every attribute record from a `.dbf` file, returning a list of `{field: value}` dicts.
 #[pyfunction]
-fn read_shapefile_attributes(path: &str) -> PyResult<PyObject> {
-    let bytes = std::fs::read(path).map_err(|e| PyIOError::new_err(e.to_string()))?;
-    let records = tpt_gis_io::shapefile::read_dbf(&bytes).map_err(to_pyerr)?;
+fn read_shapefile_attributes(py: Python<'_>, path: &str) -> PyResult<PyObject> {
+    // The .cpg sidecar names the text encoding; without one, UTF-8 (lossy) is used.
+    let records = py.allow_threads(|| -> Result<_, PyErr> {
+        let bytes = std::fs::read(path).map_err(|e| PyIOError::new_err(e.to_string()))?;
+        let encoding = std::fs::read_to_string(std::path::Path::new(path).with_extension("cpg"))
+            .ok()
+            .and_then(|text| tpt_gis_io::shapefile::encoding_from_cpg(&text))
+            .unwrap_or(tpt_gis_io::shapefile::DbfEncoding::Utf8);
+        tpt_gis_io::shapefile::read_dbf_with(&bytes, encoding).map_err(to_pyerr)
+    })?;
     Python::with_gil(|py| {
         let mut rows: Vec<Bound<'_, PyDict>> = Vec::with_capacity(records.len());
         for rec in &records {
