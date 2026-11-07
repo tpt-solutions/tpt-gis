@@ -269,7 +269,16 @@ fn resolve_format(
 }
 
 /// Writes a shapefile set beside `path`: `.shp`, `.shx`, `.dbf`, and a `.cpg` naming UTF-8.
-fn write_shapefile_files(path: &str, features: &[Feature]) -> Result<(), String> {
+/// WGS84 in ESRI WKT, the projection of GeoJSON (RFC 7946) coordinates.
+const WGS84_PRJ: &str = "GEOGCS[\"GCS_WGS_1984\",DATUM[\"D_WGS_1984\",SPHEROID[\"WGS_1984\",6378137.0,298.257223563]],PRIMEM[\"Greenwich\",0.0],UNIT[\"Degree\",0.0174532925199433]]";
+
+/// Writes a shapefile set beside `path`: `.shp`, `.shx`, `.dbf`, a `.cpg` naming UTF-8, and
+/// a `.prj` when the projection is known.
+fn write_shapefile_files(
+    path: &str,
+    features: &[Feature],
+    prj: Option<&[u8]>,
+) -> Result<(), String> {
     let (shp, dbf) = convert::write_shapefile_features(features)?;
     let base = std::path::Path::new(path);
     let write = |ext: &str, bytes: &[u8]| {
@@ -280,7 +289,11 @@ fn write_shapefile_files(path: &str, features: &[Feature]) -> Result<(), String>
     write("shp", &shp.shp)?;
     write("shx", &shp.shx)?;
     write("dbf", &dbf)?;
-    write("cpg", b"UTF-8\n")
+    write("cpg", b"UTF-8\n")?;
+    if let Some(prj) = prj {
+        write("prj", prj)?;
+    }
+    Ok(())
 }
 
 fn run_convert(
@@ -313,7 +326,16 @@ fn run_convert(
             .as_deref()
             .filter(|p| *p != "-")
             .ok_or("writing a shapefile needs --output <name>.shp (it cannot go to stdout)")?;
-        return write_shapefile_files(path, &features);
+        // The projection is known for two inputs: GeoJSON is WGS84 by definition, and a
+        // shapefile's own .prj is carried over. Other inputs have no recorded projection.
+        let prj: Option<Vec<u8>> = match in_format {
+            convert::Format::GeoJson => Some(WGS84_PRJ.as_bytes().to_vec()),
+            convert::Format::Shapefile => {
+                std::fs::read(std::path::Path::new(&input).with_extension("prj")).ok()
+            }
+            _ => None,
+        };
+        return write_shapefile_files(path, &features, prj.as_deref());
     }
     let encoded = convert::write_features(out_format, &features)?;
     match output.as_deref() {

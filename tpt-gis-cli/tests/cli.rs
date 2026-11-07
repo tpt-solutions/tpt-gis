@@ -398,3 +398,29 @@ fn shapefile_output_refuses_mixed_geometry_types() {
     .unwrap_err();
     assert!(err.contains("mix shape types"), "{err}");
 }
+
+/// GeoJSON output gets a WGS84 .prj; a shapefile-to-shapefile conversion carries the
+/// source's .prj over unchanged.
+#[test]
+fn shapefile_projection_sidecars() {
+    let dir = scratch("prj-out");
+    let input = dir.join("pts.geojson");
+    let shp = dir.join("pts.shp");
+    fs::write(
+        &input,
+        r#"{"type":"FeatureCollection","features":[{"type":"Feature","properties":{},
+            "geometry":{"type":"Point","coordinates":[1,2]}}]}"#,
+    )
+    .unwrap();
+    run_with_args(args(&["convert", "--input", &path_str(&input), "--output", &path_str(&shp)]))
+        .expect("write shapefile");
+    let prj = fs::read_to_string(dir.join("pts.prj")).unwrap();
+    assert!(prj.contains("GCS_WGS_1984"), "{prj}");
+
+    let custom = "PROJCS[\"custom\"]";
+    fs::write(dir.join("pts.prj"), custom).unwrap();
+    let copy = dir.join("copy.shp");
+    run_with_args(args(&["convert", "--input", &path_str(&shp), "--output", &path_str(&copy)]))
+        .expect("copy shapefile");
+    assert_eq!(fs::read_to_string(dir.join("copy.prj")).unwrap(), custom);
+}
