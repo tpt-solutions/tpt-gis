@@ -1,7 +1,10 @@
 # tpt-gis-index
 
-Spatial indexing — R-Trees, Quadtrees, and H3 / S2 hexagonal grid integration — for
+Spatial indexing — R-trees, quadtrees, H3 and S2 grid cells, and spatial joins — for
 the [`tpt-gis`](https://github.com/tpt-solutions/tpt-gis) engine.
+
+> **Status:** not yet published to crates.io. Depend on it by path or git, for example
+> `tpt-gis-index = { git = "https://github.com/tpt-solutions/tpt-gis" }`.
 
 ## Why
 
@@ -9,33 +12,37 @@ Most geospatial work is "find the things near this point" or "which polygons con
 these points". A flat linear scan is fine for a handful of features and hopeless for a
 million. `tpt-gis-index` provides the data structures that turn those queries into
 logarithmic-time lookups, plus discrete global grid systems (H3, S2) for
-binning/aggregation.
+binning, aggregation and polygon coverings.
 
 H3 support wraps [`h3o`](https://crates.io/crates/h3o), a mature pure-Rust
 reimplementation of Uber's H3 (BSD-3-Clause, zero FFI). The S2 module is a
 from-scratch, pure-Rust implementation using a Z-order (Morton) cell scheme — **not**
 bit-compatible with Google's Hilbert-curve S2; treat its tokens as internal to this
-crate unless/until a true Hilbert mapping is added (see the `s2` module docs).
-
-## Installation
-
-```sh
-cargo add tpt-gis-index
-```
+crate unless a true Hilbert mapping is added (see the `s2` module docs).
 
 ## Modules
 
-- **`rtree`** — Guttman R-Tree with one-at-a-time `insert` and Sort-Tile-Recursive
-  `bulk_load`; bbox-filtered `query`.
-- **`quadtree`** — region quadtree over a fixed universe, subdividing by quadrant.
-- **`h3`** — H3 cell lookup, boundary, center, `k_ring`, and parsing, via `h3o`.
-- **`s2`** — Z-order S2-style `S2CellId` with parent/child navigation and hex tokens.
-- **`spatial_join`** — R-Tree-accelerated points-in-polygons join (in-memory,
-  streaming, and batched variants).
+- **`rtree`** — Guttman R-tree with one-at-a-time `insert`, `remove`, Sort-Tile-Recursive
+  `bulk_load`, bbox `query`, and `nearest` / `nearest_iter` for nearest-neighbour search.
+- **`quadtree`** — region quadtree over a fixed universe, subdividing by quadrant, with
+  bounded depth.
+- **`h3`** — H3 cell lookup, boundary, centre, `k_ring`, parsing (via `h3o`), and
+  `polygon_cells`, the cells whose centres fall inside a polygon.
+- **`s2`** — Z-order S2-style `S2CellId` with parent and child navigation, hex tokens, and
+  `polygon_cells`, the cells covering a polygon at a chosen level.
+- **`spatial_join`** — R-tree-accelerated points-in-polygons join (in-memory, streaming, and
+  batched variants), plus polygon-intersection and nearest-polygon joins.
+
+## Installation
+
+```toml
+[dependencies]
+tpt-gis-index = { git = "https://github.com/tpt-solutions/tpt-gis" }
+```
 
 ## Examples
 
-### R-Tree: bulk load and query
+### R-tree: bulk load and query
 
 ```rust
 use tpt_gis_geom::{Point, Rect};

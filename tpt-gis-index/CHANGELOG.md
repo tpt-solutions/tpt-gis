@@ -3,27 +3,26 @@
 All notable changes to this crate will be documented in this file. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+No version has been published yet; everything is under **Unreleased** and the first
+release will be `0.1.0`.
+
 ## [Unreleased]
 
 ### Added
-- `s2::polygon_cells` — S2 polygon covering at a chosen level: the cells whose centres lie
-  inside a lon/lat polygon, with holes honoured. Checked against a brute-force lattice
-  reference, including a polygon that crosses a cube edge and one around a cube corner.
-
-## [0.1.0] - 2025-08-05
-
-### Added
-- `RTree` — Guttman R-Tree (incremental insert + quadratic-split) and
-  Sort-Tile-Recursive `bulk_load` for fast bbox queries.
-- `Quadtree` — region quadtree over a fixed universe, subdividing by quadrant.
-- `h3` — H3 hexagonal grid integration via [`h3o`] (cell lookup, boundary,
-  center, k-ring, parsing).
-- `s2` — from-scratch Z-order (Morton) S2-style cell ids with parent/child
-  navigation and hex token round-tripping.
-- `spatial_join` — R-Tree-accelerated points-in-polygons join (in-memory,
-  streaming, and batched variants).
+- `RTree` — Guttman R-tree with incremental `insert`, `remove`, and Sort-Tile-Recursive
+  `bulk_load`; bbox `query`, `nearest` and `nearest_iter` for nearest-neighbour search.
+- `Quadtree` — region quadtree over a fixed universe, subdividing by quadrant, with bounded
+  depth.
+- `h3` — H3 hexagonal grid integration via [`h3o`] (cell lookup, boundary, centre, k-ring,
+  parsing) and `polygon_cells`, the H3 cells whose centres fall inside a polygon with holes.
+- `s2` — Z-order (Morton) S2-style cell ids with parent/child navigation, hex token
+  round-tripping, id validation, and `polygon_cells`, the S2 covering of a polygon at a given
+  level, with holes honoured.
+- `spatial_join` — R-tree-accelerated points-in-polygons join (in-memory, streaming, and batched
+  variants), plus polygon-intersection and nearest-polygon joins and `point_polygon_distance`.
 - `no_std`-incompatible (relies on `tpt-gis-io`); builds for host targets only.
 
+### Fixed
+- S2 ids are validated, and quadtree depth is bounded.
+
 [`h3o`]: https://crates.io/crates/h3o
-[Unreleased]: https://github.com/tpt-solutions/tpt-gis/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/tpt-solutions/tpt-gis/releases/tag/v0.1.0
