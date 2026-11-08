@@ -78,8 +78,62 @@ where
         return Vec::new();
     }
 
-    // Build R-Tree from polygon bounding boxes
-    let rtree = if config.use_bulk_load {
+    let rtree = build_polygon_index(polygons, config);
+
+    let mut results = Vec::new();
+    let mut candidates = Vec::new();
+
+    // For each point, query the R-Tree for candidate polygons, then test exactly
+    for point_data in points {
+        for_each_containing(&rtree, polygons, point_data.point, &mut candidates, |poly_idx| {
+            let poly = &polygons[poly_idx];
+            results.push(JoinResult {
+                point: point_data.point,
+                point_payload: point_data.payload.clone(),
+                polygon: poly.polygon.clone(),
+                polygon_payload: poly.payload.clone(),
+            });
+        });
+    }
+
+    results
+}
+
+/// Index-only spatial join: like [`spatial_join`], but returns `(point index, polygon
+/// index)` pairs into the input slices instead of cloning every matched polygon and
+/// payload. Use this when polygons are large or matches are numerous; look the
+/// geometry and payloads up by index afterwards.
+///
+/// Pairs are ordered by point index, then by R-Tree candidate order.
+#[must_use]
+pub fn spatial_join_indices<P, Q>(
+    points: &[IndexedPoint<P>],
+    polygons: &[IndexedPolygon<Q>],
+    config: SpatialJoinConfig,
+) -> Vec<(usize, usize)> {
+    if points.is_empty() || polygons.is_empty() {
+        return Vec::new();
+    }
+
+    let rtree = build_polygon_index(polygons, config);
+    let mut results = Vec::new();
+    let mut candidates = Vec::new();
+
+    for (point_idx, point_data) in points.iter().enumerate() {
+        for_each_containing(&rtree, polygons, point_data.point, &mut candidates, |poly_idx| {
+            results.push((point_idx, poly_idx));
+        });
+    }
+
+    results
+}
+
+/// Builds the R-Tree over polygon bounding boxes (values are indices into `polygons`).
+fn build_polygon_index<Q>(
+    polygons: &[IndexedPolygon<Q>],
+    config: SpatialJoinConfig,
+) -> RTree<usize> {
+    if config.use_bulk_load {
         let entries: Vec<(Rect, usize)> = polygons
             .iter()
             .enumerate()
@@ -94,32 +148,26 @@ where
             }
         }
         tree
-    };
+    }
+}
 
-    let mut results = Vec::new();
-
-    // For each point, query the R-Tree for candidate polygons, then test exactly
-    for point_data in points {
-        let point_rect = Rect::new(point_data.point, point_data.point);
-        let candidate_indices = rtree.query(&point_rect);
-
-        for &poly_idx in candidate_indices {
-            let poly = &polygons[poly_idx];
-            // Convert to tpt-gis-geom Polygon for exact test
-            let mut scratch = Vec::new();
-            let geom_poly = poly.polygon.as_geom(&mut scratch);
-            if geom_poly.contains_point(point_data.point) {
-                results.push(JoinResult {
-                    point: point_data.point,
-                    point_payload: point_data.payload.clone(),
-                    polygon: poly.polygon.clone(),
-                    polygon_payload: poly.payload.clone(),
-                });
-            }
+/// Calls `on_match` with the index of every polygon that contains `point`. `candidates`
+/// is a caller-owned buffer reused across calls to avoid a per-point allocation.
+fn for_each_containing<'t, Q>(
+    rtree: &'t RTree<usize>,
+    polygons: &[IndexedPolygon<Q>],
+    point: Point,
+    candidates: &mut Vec<&'t usize>,
+    mut on_match: impl FnMut(usize),
+) {
+    candidates.clear();
+    rtree.query_into(&Rect::new(point, point), candidates);
+    for &&poly_idx in candidates.iter() {
+        let mut scratch = Vec::new();
+        if polygons[poly_idx].polygon.as_geom(&mut scratch).contains_point(point) {
+            on_match(poly_idx);
         }
     }
-
-    results
 }
 
 /// Streaming spatial join for large datasets that don't fit in memory.
@@ -142,41 +190,20 @@ pub fn spatial_join_streaming<P, Q, F>(
     }
 
     // Build R-Tree once from polygons
-    let rtree = if config.use_bulk_load {
-        let entries: Vec<(Rect, usize)> = polygons
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, poly)| poly.polygon.bbox().map(|bbox| (bbox, idx)))
-            .collect();
-        RTree::bulk_load(entries)
-    } else {
-        let mut tree = RTree::new();
-        for (idx, poly) in polygons.iter().enumerate() {
-            if let Some(bbox) = poly.polygon.bbox() {
-                tree.insert(bbox, idx);
-            }
-        }
-        tree
-    };
+    let rtree = build_polygon_index(polygons, config);
 
     // Process points one at a time (or in batches if the iterator provides them)
+    let mut candidates = Vec::new();
     for point_data in points {
-        let point_rect = Rect::new(point_data.point, point_data.point);
-        let candidate_indices = rtree.query(&point_rect);
-
-        for &poly_idx in candidate_indices {
+        for_each_containing(&rtree, polygons, point_data.point, &mut candidates, |poly_idx| {
             let poly = &polygons[poly_idx];
-            let mut scratch = Vec::new();
-            let geom_poly = poly.polygon.as_geom(&mut scratch);
-            if geom_poly.contains_point(point_data.point) {
-                on_match(JoinResult {
-                    point: point_data.point,
-                    point_payload: point_data.payload.clone(),
-                    polygon: poly.polygon.clone(),
-                    polygon_payload: poly.payload.clone(),
-                });
-            }
-        }
+            on_match(JoinResult {
+                point: point_data.point,
+                point_payload: point_data.payload.clone(),
+                polygon: poly.polygon.clone(),
+                polygon_payload: poly.payload.clone(),
+            });
+        });
     }
 }
 
@@ -200,46 +227,25 @@ pub fn spatial_join_batched<P, Q, F>(
         return;
     }
 
-    let rtree = if config.use_bulk_load {
-        let entries: Vec<(Rect, usize)> = polygons
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, poly)| poly.polygon.bbox().map(|bbox| (bbox, idx)))
-            .collect();
-        RTree::bulk_load(entries)
-    } else {
-        let mut tree = RTree::new();
-        for (idx, poly) in polygons.iter().enumerate() {
-            if let Some(bbox) = poly.polygon.bbox() {
-                tree.insert(bbox, idx);
-            }
-        }
-        tree
-    };
+    let rtree = build_polygon_index(polygons, config);
 
     let mut batch = Vec::with_capacity(batch_size);
 
+    let mut candidates = Vec::new();
     for point_data in points {
-        let point_rect = Rect::new(point_data.point, point_data.point);
-        let candidate_indices = rtree.query(&point_rect);
-
-        for &poly_idx in candidate_indices {
+        for_each_containing(&rtree, polygons, point_data.point, &mut candidates, |poly_idx| {
             let poly = &polygons[poly_idx];
-            let mut scratch = Vec::new();
-            let geom_poly = poly.polygon.as_geom(&mut scratch);
-            if geom_poly.contains_point(point_data.point) {
-                batch.push(JoinResult {
-                    point: point_data.point,
-                    point_payload: point_data.payload.clone(),
-                    polygon: poly.polygon.clone(),
-                    polygon_payload: poly.payload.clone(),
-                });
+            batch.push(JoinResult {
+                point: point_data.point,
+                point_payload: point_data.payload.clone(),
+                polygon: poly.polygon.clone(),
+                polygon_payload: poly.payload.clone(),
+            });
 
-                if batch.len() >= batch_size {
-                    on_batch(core::mem::take(&mut batch));
-                }
+            if batch.len() >= batch_size {
+                on_batch(core::mem::take(&mut batch));
             }
-        }
+        });
     }
 
     if !batch.is_empty() {
@@ -362,6 +368,39 @@ mod tests {
 
     fn make_polygon(exterior: Vec<Point>, id: usize) -> IndexedPolygon<usize> {
         IndexedPolygon { polygon: Polygon::from_exterior(exterior), payload: id }
+    }
+
+    #[test]
+    fn index_join_matches_full_join() {
+        let square = |x: f64, y: f64, id| {
+            make_polygon(
+                vec![
+                    Point::new(x, y),
+                    Point::new(x + 10.0, y),
+                    Point::new(x + 10.0, y + 10.0),
+                    Point::new(x, y + 10.0),
+                    Point::new(x, y),
+                ],
+                id,
+            )
+        };
+        // Overlapping squares so some points match two polygons.
+        let polygons = vec![square(0.0, 0.0, 0), square(5.0, 5.0, 1), square(30.0, 30.0, 2)];
+        let points: Vec<_> = (0..40)
+            .map(|i| make_point((i % 8) as f64 * 5.0 - 2.0, (i / 8) as f64 * 5.0 - 2.0, i))
+            .collect();
+
+        for bulk in [true, false] {
+            let config = SpatialJoinConfig { use_bulk_load: bulk };
+            let full = spatial_join(&points, &polygons, config);
+            let pairs = spatial_join_indices(&points, &polygons, config);
+            assert_eq!(full.len(), pairs.len());
+            assert!(!pairs.is_empty());
+            for (res, &(pi, qi)) in full.iter().zip(&pairs) {
+                assert_eq!(res.point_payload, points[pi].payload);
+                assert_eq!(res.polygon_payload, polygons[qi].payload);
+            }
+        }
     }
 
     #[test]
