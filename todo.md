@@ -562,7 +562,12 @@ the same logic, not real GDAL/QGIS/libtiff output; add third-party fixtures.
 ### 4.5 Innovation
 - [x] **Geofence compiler**: `tptgis geofence-compile in.geojson > fence.rs` emitting a
       `const` `no_std` zero-alloc polygon + bbox table for drone/IoT firmware
-- [ ] Browser/WASM playground (GitHub Pages): load GeoJSON, reproject, join client-side
+- [x] Browser/WASM playground (GitHub Pages): load GeoJSON, reproject, join client-side
+      - Done: `examples/wasm-playground` (`reproject` and `join` over `tpt-gis-io`,
+        `tpt-gis-core` and `tpt-gis-index`, compiled to WebAssembly; a static page with a
+        canvas map). `pages.yml` builds it on every PR and publishes it from `master`.
+        The Pages source must be set to "GitHub Actions" once in the repo settings.
+        Not yet run on GitHub Pages; checked in Node and with host tests.
 - [x] `tptgis validate` / `doctor` for COG layout, GeoPackage, GeoJSON
 - [ ] `tptgis cog-tiles`: XYZ tile server over HTTP-range COGs
 - [x] Differential tests against stored GDAL/PROJ/GEOS-generated fixtures

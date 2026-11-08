@@ -43,6 +43,9 @@ below is therefore under **Unreleased**; the first release will be `0.1.0`.
   geodesy, NumPy vertex arrays, type stubs and a `TptGisError` exception hierarchy.
 - Examples: `spatial-join-cli` (benchmark host), `drone-geofence-demo` (`no_std` geofence) and
   `wasm-geofence-demo` (browser harness).
+- Browser playground (`examples/wasm-playground`): load GeoJSON, reproject between supported
+  EPSG codes, and join points to polygons, all client-side in WebAssembly. Published to GitHub
+  Pages from `master` by `.github/workflows/pages.yml`.
 - CI: MSRV job, rustdoc with warnings as errors, feature-powerset checks, `no_std` cross-compiles,
   line coverage, scheduled advisory and fuzz runs.
 

@@ -146,7 +146,7 @@ The minimum supported Rust version is 1.87. `tpt-gis-core` and `tpt-gis-geom` ar
 cross-compiles them for `thumbv7em-none-eabihf`, `riscv32imc-unknown-none-elf` (the
 ESP32-C3 target), `wasm32-unknown-unknown` and `wasm32-wasip1`.
 
-The workspace excludes `examples/wasm-geofence-demo`, the cargo-fuzz harnesses, and the
+The workspace excludes `examples/wasm-geofence-demo`, `examples/wasm-playground`, the cargo-fuzz harnesses, and the
 Python binding; each has its own build steps in its README.
 
 ## Examples
@@ -157,6 +157,9 @@ Python binding; each has its own build steps in its README.
   drone geofence / navigation engine (breach detection and escape vector).
 - [`examples/wasm-geofence-demo`](examples/wasm-geofence-demo) — a browser/WASM demo that
   reuses the drone geofence `check_position` logic in a `wasm-bindgen` + canvas harness.
+- [`examples/wasm-playground`](examples/wasm-playground) — a browser playground that loads
+  GeoJSON, reprojects it and joins points to polygons, all client-side. Published to GitHub
+  Pages from `master`.
 
 ## Documentation
 
