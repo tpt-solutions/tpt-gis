@@ -40,7 +40,8 @@ cargo add tpt-gis-core
     (correctly accounts for longitude shrinking with `cos(latitude)`).
 - **`datum`** — geodetic ↔ geocentric (ECEF) conversion and 7-parameter Helmert
   (Bursa-Wolf) datum transformation.
-- **`crs` / `epsg`** — a small, curated CRS registry (WGS84, Web Mercator, UTM).
+- **`crs` / `epsg`** — a small, curated CRS registry (WGS84, Web Mercator, UTM, OSGB36 and the
+  British National Grid).
 
 ## Examples
 

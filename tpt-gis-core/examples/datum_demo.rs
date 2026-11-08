@@ -24,8 +24,8 @@ fn main() {
     if let Some(crs) = tpt_gis_core::epsg::lookup(32618) {
         println!("EPSG 32618 resolves to {crs:?}");
     }
-    if tpt_gis_core::epsg::lookup(27700).is_none() {
-        println!("EPSG 27700 (British National Grid) is not yet in the registry");
+    if let Some(crs) = tpt_gis_core::epsg::lookup(27700) {
+        println!("EPSG 27700 resolves to {crs:?} (British National Grid, OSGB36 datum)");
     }
 
     // --- Datum transform via a Helmert 7-parameter (Bursa-Wolf) transform ----

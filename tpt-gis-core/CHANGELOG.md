@@ -6,6 +6,12 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Added
+- OSGB36 and the British National Grid: `Crs::Osgb36` (EPSG:4277) and `Crs::BritishNationalGrid`
+  (EPSG:27700), `Ellipsoid::AIRY_1830`, and `projection::transverse_mercator::british_national_grid`.
+  The datum shift to WGS84 is the Ordnance Survey's Helmert transform (about 5 m; OSTN15 is not
+  used). Checked against PROJ and the Ordnance Survey's worked example. The `Crs` enum has new
+  variants, so exhaustive matches need the new arms.
+- `datum::inverse_transform_geocentric`, the exact inverse of `transform_geocentric`.
 - `geodesic::polygon_measure`: perimeter and enclosed area of a polygon on the ellipsoid, as
   GeographicLib's `PolygonArea` computes them (antimeridian and pole handling included).
 - `geodesic::sample`: points at equal arc-length steps along the geodesic between two points,

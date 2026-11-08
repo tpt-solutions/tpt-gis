@@ -576,7 +576,7 @@ fn parse_crs(s: &str) -> Result<Crs, String> {
                 code[5..].parse().map_err(|_| format!("invalid EPSG code in '{s}'"))?;
             tpt_gis_core::epsg::lookup(number).ok_or_else(|| {
                 format!(
-                    "EPSG:{number} is not supported (supported: 4326, 3857, 2154, 5070, 32601-32660, 32701-32760)"
+                    "EPSG:{number} is not supported (supported: 4326, 3857, 2154, 5070, 4277, 27700, 32601-32660, 32701-32760)"
                 )
             })
         }
@@ -645,6 +645,8 @@ fn project_forward(geo: GeoPoint, target: Crs) -> PlanarPoint {
         Crs::Wgs84 => PlanarPoint::new(geo.lon_deg, geo.lat_deg),
         Crs::Lambert93 => tpt_gis_core::projection::lcc::LambertConformal::lambert93().forward(geo),
         Crs::ConusAlbers => tpt_gis_core::projection::albers::Albers::conus_albers().forward(geo),
+        // The OSGB36 CRSs need the datum shift, which `from_geographic` applies.
+        Crs::Osgb36 | Crs::BritishNationalGrid => target.from_geographic(geo),
     }
 }
 
@@ -734,8 +736,14 @@ mod tests {
 
     #[test]
     fn parse_crs_rejects_unsupported_epsg_codes_with_the_list() {
-        let err = parse_crs("EPSG:27700").unwrap_err();
-        assert!(err.contains("EPSG:27700") && err.contains("3857"), "{err}");
+        let err = parse_crs("EPSG:4269").unwrap_err();
+        assert!(err.contains("EPSG:4269") && err.contains("3857"), "{err}");
+    }
+
+    #[test]
+    fn parse_crs_accepts_osgb36_and_the_british_national_grid() {
+        assert!(matches!(parse_crs("EPSG:4277"), Ok(Crs::Osgb36)));
+        assert!(matches!(parse_crs("epsg:27700"), Ok(Crs::BritishNationalGrid)));
     }
 
     #[test]

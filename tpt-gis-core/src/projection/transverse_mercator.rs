@@ -166,12 +166,43 @@ impl TransverseMercator {
     }
 }
 
+/// The British National Grid (EPSG:27700): a Transverse Mercator on the Airy 1830 ellipsoid,
+/// with origin 49°N 2°W, scale 0.9996012717 on the central meridian, and false origin
+/// (400 000 m E, −100 000 m N).
+///
+/// Its coordinates are on OSGB36, not WGS84. [`crate::crs::Crs::BritishNationalGrid`] applies the
+/// datum shift to WGS84.
+#[must_use]
+pub fn british_national_grid() -> TransverseMercator {
+    TransverseMercator::new(
+        &crate::Ellipsoid::AIRY_1830,
+        49.0,
+        -2.0,
+        0.999_601_271_7,
+        400_000.0,
+        -100_000.0,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::float_ext::Fabs as _;
     use crate::projection::utm;
     use crate::projection::utm::Zone;
+
+    /// The Ordnance Survey's worked example (Caister Water Tower): National Grid
+    /// E 651409.903, N 313177.270 is OSGB36 52°39′27.2531″N, 1°43′4.5177″E. This checks the
+    /// projection alone, with no datum shift.
+    #[test]
+    fn caister_water_tower_matches_the_ordnance_survey_example() {
+        let grid = british_national_grid();
+        let g = grid.inverse(PlanarPoint::new(651_409.903, 313_177.270));
+        let want_lat = 52.0 + 39.0 / 60.0 + 27.2531 / 3600.0;
+        let want_lon = 1.0 + 43.0 / 60.0 + 4.5177 / 3600.0;
+        assert!((g.lat_deg - want_lat).fabs() < 1e-7, "lat {} want {want_lat}", g.lat_deg);
+        assert!((g.lon_deg - want_lon).fabs() < 1e-7, "lon {} want {want_lon}", g.lon_deg);
+    }
 
     /// UTM is this projection with origin latitude 0, scale 0.9996 and a 500 km false
     /// easting; the two must agree exactly.

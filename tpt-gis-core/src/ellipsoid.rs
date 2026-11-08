@@ -47,6 +47,11 @@ impl Ellipsoid {
     /// Numerically near-identical to WGS84 at the sub-millimeter level.
     pub const GRS80: Self =
         Self { semi_major_axis: 6_378_137.0, flattening: 1.0 / 298.257_222_101 };
+
+    /// Airy 1830 ellipsoid — the reference of the OSGB36 datum, used by the British National Grid
+    /// (EPSG:4277, EPSG:27700).
+    pub const AIRY_1830: Self =
+        Self { semi_major_axis: 6_377_563.396, flattening: 1.0 / 299.324_964_6 };
 }
 
 #[cfg(test)]

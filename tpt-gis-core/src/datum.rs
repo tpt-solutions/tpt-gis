@@ -148,6 +148,33 @@ pub fn transform_geocentric(params: &HelmertParams, point: Geocentric) -> Geocen
     }
 }
 
+/// Inverts [`transform_geocentric`]: returns the point that the forward transform maps to
+/// `point`.
+///
+/// Negating the parameters is only a first-order inverse, and it leaves a translation error of
+/// a few millimetres. Instead this solves the linear system exactly by fixed-point iteration.
+/// The rotation part is of order 1e-5 rad, so a few iterations reach floating-point precision.
+#[must_use]
+pub fn inverse_transform_geocentric(params: &HelmertParams, point: Geocentric) -> Geocentric {
+    let scale_factor = 1.0 + params.scale;
+    // The forward map is `y = t + s·(x + N·x)`, with `N` the small-angle rotation matrix
+    // below, so `x = z − N·x` where `z = (y − t) / s`.
+    let z = Geocentric {
+        x: (point.x - params.tx) / scale_factor,
+        y: (point.y - params.ty) / scale_factor,
+        z: (point.z - params.tz) / scale_factor,
+    };
+    let mut x = z;
+    for _ in 0..4 {
+        x = Geocentric {
+            x: z.x - (-params.rz * x.y + params.ry * x.z),
+            y: z.y - (params.rz * x.x - params.rx * x.z),
+            z: z.z - (-params.ry * x.x + params.rx * x.y),
+        };
+    }
+    x
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -192,6 +219,23 @@ mod tests {
         let (north, h) = geocentric_to_geodetic(&ell, pole);
         assert!((north.lat_deg - 90.0).fabs() < 1e-9, "north lat {} h {h}", north.lat_deg);
         assert!((h - 100.0).fabs() < 1e-6, "height {h}");
+    }
+
+    /// The inverse solves the forward map exactly, so forward(inverse(y)) returns y to floating
+    /// point. Uses the OSGB36 to WGS84 parameters and a point at the scale of Great Britain.
+    #[test]
+    fn inverse_transform_undoes_the_forward_transform() {
+        let arcsec = core::f64::consts::PI / (180.0 * 3600.0);
+        let params = HelmertParams::from_arcsec_ppm(
+            446.448, -125.157, 542.060, 0.1502, 0.2470, 0.8421, -20.4894,
+        );
+        assert!((params.rx - 0.1502 * arcsec).fabs() < 1e-18);
+        let point = Geocentric::new(3_818_000.0, -97_000.0, 5_076_000.0);
+        let forward = transform_geocentric(&params, point);
+        let back = inverse_transform_geocentric(&params, forward);
+        assert!((back.x - point.x).fabs() < 1e-6, "x {}", back.x - point.x);
+        assert!((back.y - point.y).fabs() < 1e-6, "y {}", back.y - point.y);
+        assert!((back.z - point.z).fabs() < 1e-6, "z {}", back.z - point.z);
     }
 
     #[test]

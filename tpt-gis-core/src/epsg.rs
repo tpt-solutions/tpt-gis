@@ -4,7 +4,8 @@
 //! definitions with complex per-datum parameters) — that is tracked as future work.
 //! For now, this module resolves the handful of CRSs in [`crate::crs::Crs`]: WGS84,
 //! Web Mercator, any UTM zone (computed formulaically, not tabulated), Lambert-93
-//! (EPSG:2154), and Conus Albers (EPSG:5070).
+//! (EPSG:2154), Conus Albers (EPSG:5070), OSGB36 (EPSG:4277) and the British National Grid
+//! (EPSG:27700).
 
 use crate::crs::Crs;
 use crate::projection::utm::Zone;
@@ -19,6 +20,8 @@ pub fn lookup(epsg_code: u32) -> Option<Crs> {
         32701..=32760 => Some(Crs::Utm(Zone::new((epsg_code - 32700) as u8, false))),
         2154 => Some(Crs::Lambert93),
         5070 => Some(Crs::ConusAlbers),
+        4277 => Some(Crs::Osgb36),
+        27700 => Some(Crs::BritishNationalGrid),
         _ => None,
     }
 }
@@ -47,7 +50,13 @@ mod tests {
     }
 
     #[test]
+    fn looks_up_osgb36_and_british_national_grid() {
+        assert_eq!(lookup(4277), Some(Crs::Osgb36));
+        assert_eq!(lookup(27700), Some(Crs::BritishNationalGrid));
+    }
+
+    #[test]
     fn unknown_code_returns_none() {
-        assert_eq!(lookup(27700), None); // British National Grid — not yet in the registry.
+        assert_eq!(lookup(4269), None); // NAD83 geographic — not yet in the registry.
     }
 }
