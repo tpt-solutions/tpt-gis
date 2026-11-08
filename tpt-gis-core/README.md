@@ -5,7 +5,10 @@ Coordinate reference systems, datum transformations, and geodesic math for the
 
 This crate is `no_std` by default (it uses [`libm`] for transcendental math so it
 runs on embedded targets); enable the `std` feature to use the platform's native
-math intrinsics, and/or `serde` for (de)serialization of the geometry types.
+math intrinsics.
+
+> **Status:** not yet published to crates.io. Depend on it by path or git, for example
+> `tpt-gis-core = { git = "https://github.com/tpt-solutions/tpt-gis" }`.
 
 ## Why
 
@@ -14,34 +17,36 @@ is A from B on the Earth?", "what's the UTM easting of this coordinate?", "shift
 this point from one datum to another" — is a handful of well-understood formulas.
 `tpt-gis-core` implements those formulas from scratch in safe, `no_std` Rust.
 
-## Installation
-
-```sh
-cargo add tpt-gis-core
-```
-
 ## Features
 
-| Feature  | Default | Description                                            |
-| -------- | ------- | ------------------------------------------------------ |
-| `std`    | off     | Use the platform's native `f64` math intrinsics.       |
-| `serde`  | off     | Derive `Serialize`/`Deserialize` on `GeoPoint`, etc.   |
+| Feature | Default | Description                                      |
+| ------- | ------- | ------------------------------------------------ |
+| `std`   | off     | Use the platform's native `f64` math intrinsics. |
 
 ## Modules
 
 - **`ellipsoid`** — `Ellipsoid` reference models (`WGS84`, `GRS80`) and their
-  semi-axis / eccentricity parameters.
-- **`geodesic`** — Karney inverse (distance + initial/final bearing) and direct
-  (destination from start, bearing, distance) on an ellipsoid.
+  semi-axis and eccentricity parameters.
+- **`geodesic`** — Karney inverse (distance and initial and final bearing) and direct
+  (destination from a start point, bearing and distance) on an ellipsoid. Also
+  `polygon_measure` (perimeter and area of a polygon on the ellipsoid) and `sample`
+  (points at equal steps along a geodesic).
 - **`projection`**
-  - `web_mercator` — WGS84 ↔ Web Mercator (EPSG:3857), in meters.
-  - `utm` — WGS84 ↔ UTM (forward + inverse) with `Zone` selection (EPSG:326xx/327xx).
+  - `web_mercator` — WGS84 ↔ Web Mercator (EPSG:3857), in metres.
+  - `utm` — WGS84 ↔ UTM (forward and inverse) with `Zone` selection (EPSG:326xx / 327xx).
+  - `transverse_mercator` — generic Transverse Mercator.
+  - `lcc` — Lambert Conformal Conic, with `Lambert93` (EPSG:2154) as a preset.
+  - `albers` — Albers Equal-Area, with `conus_albers` (EPSG:5070) as a preset.
+  - `transverse_mercator` — Transverse Mercator with any origin, with `british_national_grid`
+    (EPSG:27700) as a preset.
   - `local_tangent_plane` — local East-North-Up approximation for small areas
     (correctly accounts for longitude shrinking with `cos(latitude)`).
+- **`crs`** — the `Crs` enum (`Wgs84`, `WebMercator`, `Utm`, `Lambert93`, `ConusAlbers`, `Osgb36`,
+  `BritishNationalGrid`) and
+  `transform`, which converts a point between any two of them.
+- **`epsg`** — `lookup`, which maps an EPSG code to a `Crs`.
 - **`datum`** — geodetic ↔ geocentric (ECEF) conversion and 7-parameter Helmert
   (Bursa-Wolf) datum transformation.
-- **`crs` / `epsg`** — a small, curated CRS registry (WGS84, Web Mercator, UTM, OSGB36 and the
-  British National Grid).
 
 ## Examples
 
@@ -86,10 +91,22 @@ println!("Sydney is {:.0} m east, {:.0} m north of Melbourne",
     local.x, local.y);
 ```
 
+### Transforming between supported CRSs
+
+```rust
+use tpt_gis_core::crs::{transform, Crs};
+use tpt_gis_core::PlanarPoint;
+
+// Paris, as a WGS84 longitude/latitude pair, into Lambert-93 metres.
+let wgs84 = PlanarPoint::new(2.3522, 48.8566);
+let lambert = transform(wgs84, Crs::Wgs84, Crs::Lambert93);
+println!("Lambert-93 = ({:.1}, {:.1})", lambert.x, lambert.y);
+```
+
 ### Datum transformation (geodetic ↔ ECEF)
 
 ```rust
-use tpt_gis_core::datum::{geodetic_to_geocentric, geocentric_to_geodetic, Geocentric};
+use tpt_gis_core::datum::{geodetic_to_geocentric, geocentric_to_geodetic};
 use tpt_gis_core::{Ellipsoid, GeoPoint};
 
 let geo = GeoPoint::new(-37.8136, 144.9631);
@@ -104,11 +121,13 @@ println!("round-trip height = {height}");
 ## `no_std`
 
 The `no_std` path is first-class: every public function uses `libm` for
-transcendental math, so the crate cross-compiles to bare-metal targets. The
-`drone-geofence-demo` example in the workspace is built `--no-default-features`
-for `thumbv7em-none-eabihf` and `riscv32imc-unknown-none-elf`.
+transcendental math, so the crate cross-compiles to bare-metal targets. CI builds
+this crate for `thumbv7em-none-eabihf`, `riscv32imc-unknown-none-elf` and
+`wasm32-unknown-unknown`.
 
 ## License
 
 Licensed under either of [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0)
 or [MIT license](https://opensource.org/licenses/MIT) at your option.
+
+[`libm`]: https://crates.io/crates/libm
