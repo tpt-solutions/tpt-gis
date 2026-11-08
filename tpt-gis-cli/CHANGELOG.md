@@ -26,6 +26,13 @@ release will be `0.1.0`.
 - Shapefile output writes a `.prj` sidecar, and shapefile attributes carry through `convert`,
   `info` and `validate`.
 - Integration tests in `tests/cli.rs`; `run_with_args` is testable and does not exit the process.
+- Global `-v` / `--verbose` prints progress to standard error.
+- `info` reads standard input with `--from <format>`.
+- `spatial-join` reads either `--points` or `--polygons` from standard input (`-`).
+- `spatial-join --format csv` writes a header row (`x,y` and the point property names), and
+  string values are no longer wrapped in JSON quotes.
+- Errors from `info`, `convert`, `reproject`, `geofence-compile` and `spatial-join` name the
+  file they came from.
 
 ### Changed
 - Dependencies `rand` and `csv` were replaced with in-crate modules.

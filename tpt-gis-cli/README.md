@@ -45,14 +45,23 @@ tptgis completions bash > ~/.local/share/bash-completion/completions/tptgis
 `tptgis <command> --help` is the authoritative flag list. [CLI usage](../docs/cli-usage.md)
 has longer examples.
 
+### Global flags
+
+- `-v`, `--verbose` (any position) prints progress messages to standard error: how many
+  features were read, how many matches were found, and so on. Standard output is unchanged.
+
 ### `spatial-join`
 
 ```sh
 tptgis spatial-join --points points.geojson --polygons zones.geojson \
     --output joined.geojson --format geojson
+cat points.geojson | tptgis spatial-join --points - --polygons zones.geojson --format csv
 ```
 
-- `--format geojson` (default) or `csv`.
+- `--format geojson` (default) or `csv`. The CSV output has a header row: `x,y`, then
+  one column per point property (the union across all matches, sorted by name). A
+  property a match lacks is an empty field.
+- `--points -` or `--polygons -` reads that input from standard input (only one of the two).
 - `--incremental` inserts into the R-tree one entry at a time instead of bulk loading.
 - Omit `--output` to write to standard output.
 
@@ -84,10 +93,15 @@ cat roads.wkt | tptgis convert --input - --from wkt --to geojson
 
 ```sh
 tptgis info cities.geojson
+tptgis info - --from wkt < cities.wkt
 ```
 
 Prints JSON with the feature count, geometry types, bounds and property names. For a
-shapefile it also reports the projection.
+shapefile it also reports the projection. A GeoTIFF gets a raster summary instead. Pass
+`--from` to name the format when reading standard input (`-`). A shapefile read from
+standard input has geometry only, because its `.dbf` and `.prj` sidecars are not there.
+
+Errors name the file they came from, for example `cities.geojson: invalid GeoJSON: ...`.
 
 ### `validate`
 
@@ -117,6 +131,10 @@ tptgis generate-fixtures --points 10000 --polygons 500 --seed 42 --output fixtur
 ```
 
 Writes reproducible synthetic GeoJSON for benchmarks and tests.
+
+## Feature flags
+
+None. The CLI always includes every format and subcommand.
 
 ## Tests
 
