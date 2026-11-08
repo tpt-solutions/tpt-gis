@@ -463,3 +463,82 @@ fn spatial_index_is_refused_for_other_formats() {
     .unwrap_err();
     assert!(err.contains("GeoPackage"), "{err}");
 }
+
+#[test]
+fn spatial_join_csv_has_a_header_and_unquoted_strings() {
+    let dir = scratch("join-csv-header");
+    let points = dir.join("points.geojson");
+    let polygons = dir.join("polygons.geojson");
+    let output = dir.join("matches.csv");
+    fs::write(
+        &points,
+        r#"{"type":"FeatureCollection","features":[
+            {"type":"Feature","properties":{"name":"plain","rank":3},"geometry":{"type":"Point","coordinates":[0.5,0.5]}}]}"#,
+    )
+    .unwrap();
+    fs::write(
+        &polygons,
+        r#"{"type":"FeatureCollection","features":[{"type":"Feature","properties":{},
+            "geometry":{"type":"Polygon","coordinates":[[[0,0],[1,0],[1,1],[0,1],[0,0]]]}}]}"#,
+    )
+    .unwrap();
+    run_with_args(args(&[
+        "spatial-join",
+        "--points",
+        &path_str(&points),
+        "--polygons",
+        &path_str(&polygons),
+        "--format",
+        "csv",
+        "--output",
+        &path_str(&output),
+    ]))
+    .expect("join succeeds");
+
+    let csv = fs::read_to_string(&output).unwrap();
+    let mut lines = csv.lines();
+    assert_eq!(lines.next(), Some("x,y,name,rank"));
+    assert_eq!(lines.next(), Some("0.5,0.5,plain,3"));
+    assert_eq!(lines.next(), None);
+}
+
+#[test]
+fn info_error_names_the_file() {
+    let dir = scratch("info-path");
+    let input = dir.join("bad.geojson");
+    fs::write(&input, "{not json").unwrap();
+    let err = run_with_args(args(&["info", &path_str(&input)])).unwrap_err();
+    assert!(err.starts_with(&path_str(&input)), "{err}");
+}
+
+#[test]
+fn info_reads_stdin_only_with_a_format() {
+    let err = run_with_args(args(&["info", "-"])).unwrap_err();
+    assert!(err.contains("--from"), "{err}");
+}
+
+#[test]
+fn verbose_flag_is_accepted_globally() {
+    let dir = scratch("verbose");
+    let input = dir.join("in.wkt");
+    let output = dir.join("out.geojson");
+    fs::write(&input, "POINT (1 2)\n").unwrap();
+    run_with_args(args(&[
+        "--verbose",
+        "convert",
+        "--input",
+        &path_str(&input),
+        "--output",
+        &path_str(&output),
+    ]))
+    .expect("convert succeeds with --verbose");
+    run_with_args(args(&[
+        "convert",
+        "-v",
+        "--input",
+        &path_str(&input),
+        "--output",
+        &path_str(&output),
+    ]))
+    .expect("short -v also works");
+}

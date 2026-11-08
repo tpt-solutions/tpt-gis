@@ -37,8 +37,37 @@ type SpatialJoinResult = JoinResult<Payload, Payload>;
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Cli {
+    /// Print progress messages to standard error.
+    #[arg(long, short, global = true)]
+    verbose: bool,
+
     #[command(subcommand)]
     command: Commands,
+}
+
+/// Whether `--verbose` was given for the current run. Set by [`run_with_args`].
+static VERBOSE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Prints `message` to standard error when `--verbose` is set.
+fn vlog(message: impl FnOnce() -> String) {
+    if VERBOSE.load(std::sync::atomic::Ordering::Relaxed) {
+        eprintln!("{}", message());
+    }
+}
+
+/// Reads a whole text input: a file path, or standard input when the path is `-`.
+/// `what` names the input in error messages.
+fn read_text_input(path: &str, what: &str) -> Result<String, String> {
+    if path == "-" {
+        use std::io::Read;
+        let mut text = String::new();
+        std::io::stdin()
+            .read_to_string(&mut text)
+            .map_err(|e| format!("failed to read {what} from stdin: {e}"))?;
+        Ok(text)
+    } else {
+        std::fs::read_to_string(path).map_err(|e| format!("failed to read {path}: {e}"))
+    }
 }
 
 /// Output encodings for `spatial-join`.
@@ -114,8 +143,13 @@ enum Commands {
     /// Print a JSON summary of a vector file: feature count, geometry types, bounds,
     /// and property names.
     Info {
-        /// Input file.
+        /// Input file, or `-` to read stdin (then `--from` is required).
         input: String,
+
+        /// Input format (geojson, wkt, wkb, shp, gpkg). Needed for stdin; otherwise
+        /// inferred from the file extension.
+        #[arg(long)]
+        from: Option<String>,
     },
     /// Print a shell completion script for `tptgis` to standard output.
     Completions {
@@ -194,6 +228,7 @@ where
             return Ok(());
         }
     };
+    VERBOSE.store(cli.verbose, std::sync::atomic::Ordering::Relaxed);
     match cli.command {
         Commands::SpatialJoin { points, polygons, output, format, incremental } => {
             run_spatial_join(points, polygons, output, format, incremental)
@@ -205,7 +240,7 @@ where
         Commands::Convert { input, output, from, to, spatial_index } => {
             run_convert(input, output, from, to, spatial_index)
         }
-        Commands::Info { input } => run_info(input),
+        Commands::Info { input, from } => run_info(input, from),
         Commands::Validate { input } => run_validate(&input),
         Commands::Completions { shell } => {
             let mut buf = Vec::new();
@@ -319,10 +354,12 @@ fn run_convert(
         std::fs::read(&input).map_err(|e| format!("failed to read {input}: {e}"))?
     };
     let features = if input == "-" {
-        convert::read_features(in_format, &bytes)?
+        convert::read_features(in_format, &bytes).map_err(|e| format!("stdin: {e}"))?
     } else {
-        convert::read_file_features(&input, in_format, &bytes)?
+        convert::read_file_features(&input, in_format, &bytes)
+            .map_err(|e| format!("{input}: {e}"))?
     };
+    vlog(|| format!("read {} feature(s) from {input}", features.len()));
 
     let out_format = match (to.as_deref(), output.as_deref()) {
         (None, None) => convert::Format::GeoJson,
@@ -357,9 +394,10 @@ fn run_convert(
 }
 
 fn run_geofence_compile(input: String, output: Option<String>) -> Result<(), String> {
-    let text =
-        std::fs::read_to_string(&input).map_err(|e| format!("failed to read {input}: {e}"))?;
-    let fc = parse_feature_collection(&text).map_err(|e| format!("invalid GeoJSON: {e}"))?;
+    let text = read_text_input(&input, "input file")?;
+    let fc =
+        parse_feature_collection(&text).map_err(|e| format!("{input}: invalid GeoJSON: {e}"))?;
+    vlog(|| format!("compiling {} feature(s) into a geofence module", fc.features.len()));
     let source = geofence::generate(&fc.features)?;
     match output.as_deref() {
         Some(path) if path != "-" => {
@@ -385,17 +423,39 @@ fn run_validate(input: &str) -> Result<(), String> {
 }
 
 /// The JSON summary `info` prints for a file.
-fn info_json(input: &str) -> Result<Value, String> {
-    if input.to_ascii_lowercase().ends_with(".tif") || input.to_ascii_lowercase().ends_with(".tiff")
-    {
+fn info_json(input: &str, from: Option<&str>) -> Result<Value, String> {
+    let lower = input.to_ascii_lowercase();
+    if input != "-" && (lower.ends_with(".tif") || lower.ends_with(".tiff")) {
         let bytes = std::fs::read(input).map_err(|e| format!("failed to read {input}: {e}"))?;
-        return raster_summary(&bytes);
+        return raster_summary(&bytes).map_err(|e| format!("{input}: {e}"));
     }
-    let format = convert::Format::from_path(input).ok_or_else(|| {
-        format!("unsupported file type for '{input}' (supported: .geojson, .json, .wkt, .wkb, .shp, .gpkg)")
-    })?;
+    if input == "-" {
+        // Standard input has no name to infer the format from, and no sibling files
+        // (so a shapefile from stdin has geometry only, no attributes or projection).
+        let format = resolve_format(from, None, "from")?;
+        let mut bytes = Vec::new();
+        {
+            use std::io::Read;
+            std::io::stdin()
+                .read_to_end(&mut bytes)
+                .map_err(|e| format!("failed to read stdin: {e}"))?;
+        }
+        vlog(|| format!("read {} bytes from stdin as {format:?}", bytes.len()));
+        let features = convert::read_features(format, &bytes).map_err(|e| format!("stdin: {e}"))?;
+        let mut json = convert::summary_to_json(format, &convert::summarize(&features));
+        json["source"] = Value::String("stdin".to_string());
+        return Ok(json);
+    }
+    let format = match from {
+        Some(name) => resolve_format(Some(name), None, "from")?,
+        None => convert::Format::from_path(input).ok_or_else(|| {
+            format!("unsupported file type for '{input}' (supported: .geojson, .json, .wkt, .wkb, .shp, .gpkg)")
+        })?,
+    };
     let bytes = std::fs::read(input).map_err(|e| format!("failed to read {input}: {e}"))?;
-    let features = convert::read_file_features(input, format, &bytes)?;
+    vlog(|| format!("read {} bytes from {input} as {format:?}", bytes.len()));
+    let features =
+        convert::read_file_features(input, format, &bytes).map_err(|e| format!("{input}: {e}"))?;
     let summary = convert::summarize(&features);
     let mut json = convert::summary_to_json(format, &summary);
     // A shapefile's coordinate system is stored as WKT in the sibling .prj file.
@@ -408,8 +468,8 @@ fn info_json(input: &str) -> Result<Value, String> {
     Ok(json)
 }
 
-fn run_info(input: String) -> Result<(), String> {
-    let json = info_json(&input)?;
+fn run_info(input: String, from: Option<String>) -> Result<(), String> {
+    let json = info_json(&input, from.as_deref())?;
     let text =
         serde_json::to_string_pretty(&json).map_err(|e| format!("failed to render JSON: {e}"))?;
     write_stdout(&format!(
@@ -425,15 +485,23 @@ fn run_spatial_join(
     format: OutputFormat,
     incremental: bool,
 ) -> Result<(), String> {
-    let points_json = std::fs::read_to_string(&points_path)
-        .map_err(|e| format!("failed to read points file: {e}"))?;
-    let polygons_json = std::fs::read_to_string(&polygons_path)
-        .map_err(|e| format!("failed to read polygons file: {e}"))?;
+    if points_path == "-" && polygons_path == "-" {
+        return Err("only one of --points and --polygons can be read from stdin".to_string());
+    }
+    let points_json = read_text_input(&points_path, "points file")?;
+    let polygons_json = read_text_input(&polygons_path, "polygons file")?;
 
     let points_fc = parse_feature_collection(&points_json)
-        .map_err(|e| format!("failed to parse points FeatureCollection: {e}"))?;
+        .map_err(|e| format!("{points_path}: invalid points FeatureCollection: {e}"))?;
     let polygons_fc = parse_feature_collection(&polygons_json)
-        .map_err(|e| format!("failed to parse polygons FeatureCollection: {e}"))?;
+        .map_err(|e| format!("{polygons_path}: invalid polygons FeatureCollection: {e}"))?;
+    vlog(|| {
+        format!(
+            "loaded {} point feature(s) and {} polygon feature(s)",
+            points_fc.features.len(),
+            polygons_fc.features.len()
+        )
+    });
 
     let points: Vec<IndexedPoint<Map<String, Value>>> = points_fc
         .features
@@ -470,6 +538,7 @@ fn run_spatial_join(
     let config = SpatialJoinConfig { use_bulk_load: !incremental };
 
     let results = spatial_join(&points, &polygons, config);
+    vlog(|| format!("{} matching point/polygon pair(s)", results.len()));
 
     let output_text = match format {
         OutputFormat::Csv => write_csv(&results)?,
@@ -540,10 +609,10 @@ fn run_generate_fixtures(
 }
 
 fn run_reproject(input_path: String, crs: String, output: Option<String>) -> Result<(), String> {
-    let json = std::fs::read_to_string(&input_path)
-        .map_err(|e| format!("failed to read input file: {e}"))?;
+    let json = read_text_input(&input_path, "input file")?;
     let fc = parse_feature_collection(&json)
-        .map_err(|e| format!("failed to parse FeatureCollection: {e}"))?;
+        .map_err(|e| format!("{input_path}: invalid GeoJSON FeatureCollection: {e}"))?;
+    vlog(|| format!("reprojecting {} feature(s) to {crs}", fc.features.len()));
 
     let target = parse_crs(&crs)?;
 
@@ -663,14 +732,31 @@ fn write_geojson(results: &[SpatialJoinResult]) -> String {
     write_feature_collection(&fc)
 }
 
+/// Renders one property value as a CSV field: strings unquoted (the CSV writer adds
+/// quotes only where RFC 4180 needs them), `null` as an empty field, and anything else
+/// as its JSON text.
+fn csv_field(value: &Value) -> String {
+    match value {
+        Value::String(s) => s.clone(),
+        Value::Null => String::new(),
+        other => other.to_string(),
+    }
+}
+
+/// CSV with a header row: `x,y`, then the point properties (the union of names across
+/// all matches, in sorted order). A property a match lacks is an empty field.
 fn write_csv(results: &[SpatialJoinResult]) -> Result<String, String> {
+    let columns: std::collections::BTreeSet<&str> =
+        results.iter().flat_map(|r| r.point_payload.keys().map(String::as_str)).collect();
     let mut wtr = csv::Writer::from_writer(vec![]);
+    let header: Vec<&str> = ["x", "y"].into_iter().chain(columns.iter().copied()).collect();
+    wtr.write_record(header).map_err(|e| format!("failed to write csv header: {e}"))?;
     for r in results {
-        let mut fields: Vec<String> = Vec::new();
+        let mut fields: Vec<String> = Vec::with_capacity(columns.len() + 2);
         fields.push(r.point.x.to_string());
         fields.push(r.point.y.to_string());
-        for (_k, v) in &r.point_payload {
-            fields.push(v.to_string());
+        for name in &columns {
+            fields.push(r.point_payload.get(*name).map(csv_field).unwrap_or_default());
         }
         let strs: Vec<&str> = fields.iter().map(String::as_str).collect();
         wtr.write_record(strs).map_err(|e| format!("failed to write csv record: {e}"))?;
@@ -709,7 +795,7 @@ mod tests {
         )
         .unwrap();
 
-        let json = info_json(shp.to_str().unwrap()).unwrap();
+        let json = info_json(shp.to_str().unwrap(), None).unwrap();
         assert_eq!(json["projection_wkt"], "GEOGCS[\"GCS_WGS_1984\"]");
         assert_eq!(json["features"], 1);
         let _ = std::fs::remove_dir_all(&dir);
