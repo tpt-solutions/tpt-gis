@@ -48,6 +48,9 @@ impl<T> Node<T> {
 /// An R-Tree mapping bounding boxes to values of type `T`.
 pub struct RTree<T> {
     root: Node<T>,
+    /// Number of values stored, kept in step with every insert/remove so
+    /// [`RTree::len`] and [`RTree::is_empty`] are O(1).
+    len: usize,
 }
 
 impl<T> Default for RTree<T> {
@@ -60,7 +63,7 @@ impl<T> RTree<T> {
     /// Creates an empty R-Tree.
     #[must_use]
     pub fn new() -> Self {
-        Self { root: Node::Leaf(Vec::new()) }
+        Self { root: Node::Leaf(Vec::new()), len: 0 }
     }
 
     /// Builds an R-Tree from a complete set of `(bounding box, value)` pairs using
@@ -72,6 +75,7 @@ impl<T> RTree<T> {
         if entries.is_empty() {
             return Self::new();
         }
+        let len = entries.len();
 
         let mut level: Vec<(Rect, Node<T>)> = str_pack(entries, MAX_ENTRIES)
             .into_iter()
@@ -90,7 +94,7 @@ impl<T> RTree<T> {
         }
 
         let (_, root) = level.into_iter().next().expect("non-empty input produces a root");
-        Self { root }
+        Self { root, len }
     }
 
     /// Inserts a `(bounding box, value)` pair, rebalancing the tree (via node
@@ -105,6 +109,7 @@ impl<T> RTree<T> {
                 (split_bbox, Box::new(split_node)),
             ]),
         };
+        self.len += 1;
     }
 
     /// Returns every value whose stored bounding box intersects `region`.
@@ -131,6 +136,9 @@ impl<T> RTree<T> {
                 _ => break,
             }
         }
+        // The removed entry leaves the tree; the orphans are still counted but are about
+        // to be re-counted by `insert`, so take them out of the total first.
+        self.len -= 1 + orphans.len();
         for (rect, item) in orphans {
             self.insert(rect, item);
         }
@@ -168,8 +176,14 @@ impl<T> RTree<T> {
     #[must_use]
     pub fn query(&self, region: &Rect) -> Vec<&T> {
         let mut results = Vec::new();
-        query_node(&self.root, region, &mut results);
+        self.query_into(region, &mut results);
         results
+    }
+
+    /// Like [`Self::query`], but appends matches to `out` instead of allocating a new
+    /// `Vec`. Clear `out` between calls to reuse one buffer across many queries.
+    pub fn query_into<'a>(&'a self, region: &Rect, out: &mut Vec<&'a T>) {
+        query_node(&self.root, region, out);
     }
 
     /// Iterates over every value stored in the tree, in an unspecified order.
@@ -182,7 +196,7 @@ impl<T> RTree<T> {
     /// The number of values stored in the tree.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.iter().count()
+        self.len
     }
 
     /// Returns `true` if the tree holds no values.
@@ -686,6 +700,47 @@ mod tests {
     fn bulk_load_empty_input_yields_empty_tree() {
         let tree: RTree<()> = RTree::bulk_load(Vec::new());
         assert!(tree.is_empty());
+    }
+
+    #[test]
+    fn len_tracks_bulk_load_insert_and_remove() {
+        let boxes: Vec<(Rect, u32)> =
+            (0..100).map(|i| (rect(i as f64, 0.0, i as f64 + 0.5, 0.5), i)).collect();
+
+        let mut bulk = RTree::bulk_load(boxes.clone());
+        assert_eq!(bulk.len(), 100);
+        assert!(!bulk.is_empty());
+
+        let mut incremental = RTree::new();
+        assert!(incremental.is_empty());
+        for (r, v) in &boxes {
+            incremental.insert(*r, *v);
+        }
+        assert_eq!(incremental.len(), 100);
+
+        // Removals that dissolve underfull nodes reinsert orphans; the count must still
+        // match a full traversal.
+        for (r, v) in boxes.iter().take(60) {
+            assert!(bulk.remove(r, v));
+            assert!(incremental.remove(r, v));
+            assert_eq!(bulk.len(), bulk.iter().count());
+            assert_eq!(incremental.len(), incremental.iter().count());
+        }
+        assert_eq!(bulk.len(), 40);
+        assert!(!bulk.remove(&boxes[0].0, &boxes[0].1));
+        assert_eq!(bulk.len(), 40);
+    }
+
+    #[test]
+    fn query_into_appends_and_matches_query() {
+        let tree =
+            RTree::bulk_load(vec![(rect(0.0, 0.0, 1.0, 1.0), 1), (rect(5.0, 5.0, 6.0, 6.0), 2)]);
+        let mut buf = Vec::new();
+        tree.query_into(&rect(0.0, 0.0, 10.0, 10.0), &mut buf);
+        assert_eq!(buf.len(), 2);
+        buf.clear();
+        tree.query_into(&rect(5.0, 5.0, 5.5, 5.5), &mut buf);
+        assert_eq!(buf, tree.query(&rect(5.0, 5.0, 5.5, 5.5)));
     }
 
     #[test]
