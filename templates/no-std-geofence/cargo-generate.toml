@@ -1,0 +1,3 @@
+[template]
+cargo_generate_version = ">=0.10.0"
+description = "no_std geofence check: a const polygon and a zero-allocation point-in-zone test"

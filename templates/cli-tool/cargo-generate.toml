@@ -1,0 +1,3 @@
+[template]
+cargo_generate_version = ">=0.10.0"
+description = "Command-line tool: geodesic distance between two latitude/longitude points"

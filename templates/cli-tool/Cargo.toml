@@ -1,0 +1,11 @@
+[package]
+name = "{{project-name}}"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[dependencies]
+# The facade crate re-exports every tpt-gis crate. Not on crates.io yet: depend on the
+# repository, or use a path dependency while developing against a local checkout.
+tpt-gis = { git = "https://github.com/tpt-solutions/tpt-gis" }
