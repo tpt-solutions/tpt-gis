@@ -7,32 +7,38 @@ Unlike the `no_std` engine crates, `tpt-gis-io` is a host-native crate: parsing
 variable-sized file and stream data inherently needs heap allocation, so there is no
 reason to fight that here.
 
+> **Status:** not yet published to crates.io. Depend on it by path or git, for example
+> `tpt-gis-io = { git = "https://github.com/tpt-solutions/tpt-gis" }`.
+
 ## Why
 
-A uniform `Geometry` type in the middle and battle-tested readers/writers around it.
-Every format produces and consumes the same owned `Geometry`/`Feature` types, so you
+A uniform `Geometry` type in the middle and battle-tested readers and writers around it.
+Every format produces and consumes the same owned `Geometry` / `Feature` types, so you
 can read a Shapefile and write GeoJSON without an intermediate conversion step — and
-without any C FFI (the GeoPackage reader/writer is pure Rust, no `libsqlite3-sys`).
+without any C FFI (the GeoPackage reader and writer are pure Rust, no `libsqlite3-sys`).
 
 ## Installation
 
-```sh
-cargo add tpt-gis-io
+```toml
+[dependencies]
+tpt-gis-io = { git = "https://github.com/tpt-solutions/tpt-gis" }
 ```
 
 ## Modules
 
-- **`geometry`** — the shared owned `Geometry` / `Polygon` types produced and consumed
-  by every reader/writer. `Polygon::as_geom` bridges to `tpt-gis-geom` predicates.
-- **`geojson`** — `parse_feature_collection` / `write_feature_collection` (RFC 7946),
-  plus `parse_geometry` / `write_geometry`.
-- **`wkb`** — `parse_geometry` / `write_geometry` for standard 2D ISO/OGC Well-Known
-  Binary (big- and little-endian).
-- **`wkt`** — `parse_geometry` / `write_geometry` for Well-Known Text.
-- **`shapefile`** — read-only `read_shp` / `read_dbf` (and a streaming
-  `ShpGeometryIter`) for `.shp`/`.dbf`.
-- **`geopackage`** — `read_gpkg` / `write_gpkg` for `.gpkg` (pure-Rust SQLite file
-  format + GeoPackageBinary codec, zero FFI).
+- **`geometry`** — the shared owned `Geometry` / `Polygon` types produced and consumed by every
+  reader and writer. `Polygon::as_geom` bridges to `tpt-gis-geom` predicates.
+- **`geojson`** — `parse_feature_collection` / `write_feature_collection` (RFC 7946), plus
+  `parse_geometry` / `write_geometry`.
+- **`wkb`** — `parse_geometry` / `write_geometry` for Well-Known Binary (big- and little-endian),
+  including ISO Z/M and EWKB forms.
+- **`wkt`** — `parse_geometry` / `write_geometry` for Well-Known Text, including dimension tags
+  (`Z`, `M`, `ZM`) and `SRID=`.
+- **`shapefile`** — `read_shp`, `read_shp_records`, `read_dbf` / `read_dbf_with`, and a streaming
+  `ShpGeometryIter`. Attributes are decoded with the `.cpg` encoding.
+- **`shapefile_writer`** — `write_shapefile` (`.shp` and `.shx`) and `write_dbf`.
+- **`geopackage`** — `read_gpkg` / `write_gpkg` for `.gpkg` (pure-Rust SQLite file format and
+  GeoPackageBinary codec, zero FFI). The writer can add the R-tree spatial index.
 
 ## Examples
 
@@ -58,9 +64,8 @@ println!("feature name = {}", fc.features[0].properties["name"]);
 ### WKT and WKB
 
 ```rust
+use tpt_gis_io::geometry::{Geometry, Point};
 use tpt_gis_io::{wkb, wkt};
-use tpt_gis_io::geojson::Geometry;
-use tpt_gis_io::geometry::Point;
 
 let pt = Geometry::Point(Point::new(3.0, 4.0));
 
@@ -77,10 +82,10 @@ assert_eq!(from_wkb, pt);
 ### GeoPackage: write then read
 
 ```rust
-use tpt_gis_io::geojson::{Feature, Geometry};
-use tpt_gis_io::geopackage::{read_gpkg, write_gpkg, WriteOptions};
-use tpt_gis_io::geometry::Point;
 use serde_json::json;
+use tpt_gis_io::geojson::Feature;
+use tpt_gis_io::geometry::{Geometry, Point};
+use tpt_gis_io::geopackage::{read_gpkg, write_gpkg, WriteOptions};
 
 let feature = Feature {
     geometry: Some(Geometry::Point(Point::new(1.0, 2.0))),
@@ -95,6 +100,7 @@ let bytes = write_gpkg(
         srs_id: 4326,
         id_column: None,
         description: None,
+        spatial_index: false, // true writes the gpkg_rtree_index extension
     },
 ).unwrap();
 
@@ -107,14 +113,14 @@ println!("read back geometry = {:?}", read_back[0].geometry);
 
 ```rust
 use tpt_gis_geom::predicates;
-use tpt_gis_io::geometry::Polygon;
+use tpt_gis_io::geometry::{Point, Polygon};
 
 let polygon = Polygon::from_exterior(vec![
-    tpt_gis_io::geometry::Point::new(0.0, 0.0),
-    tpt_gis_io::geometry::Point::new(10.0, 0.0),
-    tpt_gis_io::geometry::Point::new(10.0, 10.0),
-    tpt_gis_io::geometry::Point::new(0.0, 10.0),
-    tpt_gis_io::geometry::Point::new(0.0, 0.0),
+    Point::new(0.0, 0.0),
+    Point::new(10.0, 0.0),
+    Point::new(10.0, 10.0),
+    Point::new(0.0, 10.0),
+    Point::new(0.0, 0.0),
 ]);
 
 let mut scratch = Vec::new();
@@ -127,10 +133,12 @@ assert!(predicates::point_in_ring(
 
 ## Scope notes
 
-- **Shapefile** is a **reader only**; it reads `.shp` sequentially (`.shx` is not
-  needed) and treats ring 0 as the exterior of a polygon. Z/M shape types are rejected.
-- **GeoPackage writer** is limited to **single-leaf-page** tables (no spatial index,
-  no overflow pages, no tile/attributes extension).
+- **Shapefile** reading and writing cover `.shp`, `.shx` and `.dbf`. A `.prj` sidecar is written
+  by the `tptgis` CLI, not by this crate. Z and M shape types are read as 2D. Mixed shape types
+  and geometry collections are rejected on write.
+- **GeoPackage writer** writes rowid tables with interior pages and overflow records. It can
+  write the R-tree spatial index, but not the tile or attribute extensions. The reader also
+  reads `WITHOUT ROWID` tables.
 
 ## License
 
