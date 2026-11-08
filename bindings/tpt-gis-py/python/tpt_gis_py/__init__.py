@@ -7,7 +7,13 @@ re-exported here so ``import tpt_gis_py`` is the public entry point.
 from ._core import *  # noqa: F401,F403
 from ._core import __doc__ as _core_doc  # noqa: F401
 
+import os
+import tempfile
+import zipfile
+from os import PathLike
 from typing import Any
+
+from ._core import read_shapefile_attributes, read_shapefile_geometry
 
 __all__ = [
     "TptGisError",
@@ -22,8 +28,56 @@ __all__ = [
     "geodesic_destination",
     "read_shapefile_geometry",
     "read_shapefile_attributes",
+    "read_zipped_shapefile",
     "coordinates",
 ]
+
+
+def _member(names: list[str], ext: str, stem: str | None = None) -> str | None:
+    """The first archive member with extension ``ext`` and, if given, the base name ``stem``
+    (matched without case, and with any folder kept)."""
+    for name in names:
+        if not name.lower().endswith("." + ext):
+            continue
+        base = name[: -(len(ext) + 1)]
+        if stem is None or base.lower() == stem.lower():
+            return name
+    return None
+
+
+def read_zipped_shapefile(
+    path: "str | PathLike[str]",
+) -> "tuple[list[Geometry], list[dict[str, Any]]]":
+    """Reads the first shapefile in a ``.zip`` archive: its geometries and attribute rows.
+
+    The ``.shp`` is required. The ``.dbf`` is optional; without one the attributes are an empty
+    list. A ``.cpg`` beside the ``.dbf`` sets the attribute encoding, as for an unzipped shapefile.
+    The members are copied to a temporary directory under fixed names, so archive member names
+    are never used as file paths.
+
+    Raises ``ValueError`` if the archive has no ``.shp`` member. Parse errors are the same as
+    for :func:`read_shapefile_geometry` and :func:`read_shapefile_attributes`.
+    """
+    with zipfile.ZipFile(path) as archive:
+        names = archive.namelist()
+        shp = _member(names, "shp")
+        if shp is None:
+            raise ValueError("the archive has no .shp member")
+        stem = shp[:-4]
+        parts = {"shp": shp}
+        for ext in ("dbf", "cpg"):
+            found = _member(names, ext, stem)
+            if found is not None:
+                parts[ext] = found
+        with tempfile.TemporaryDirectory() as tmp:
+            for ext, member in parts.items():
+                with open(os.path.join(tmp, f"data.{ext}"), "wb") as out:
+                    out.write(archive.read(member))
+            geometries = read_shapefile_geometry(os.path.join(tmp, "data.shp"))
+            attributes = (
+                read_shapefile_attributes(os.path.join(tmp, "data.dbf")) if "dbf" in parts else []
+            )
+    return geometries, attributes
 
 
 def coordinates(geometry: "Geometry") -> "numpy.ndarray":  # noqa: F821

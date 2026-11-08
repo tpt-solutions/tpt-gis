@@ -91,6 +91,17 @@ dicts mapping each field name to a Python value (`str`, `float`, `Optional[bool]
 an ISO `YYYY-MM-DD` date string). See `tpt-gis-io`'s shapefile module for the full
 scope notes (Z/M shapes and multi-exterior polygons are not supported).
 
+A shapefile zipped into an archive can be read directly. `read_zipped_shapefile` takes the path
+of a `.zip`, reads the first `.shp` in it with its `.dbf` and `.cpg` (the `.dbf` is optional), and
+returns `(geometries, attributes)`:
+
+```python
+geoms, attrs = gis.read_zipped_shapefile("states.zip")
+```
+
+It copies the members to a temporary directory under fixed names, so member names are never
+used as file paths.
+
 ### Geometry properties, equality, and pickling
 
 ```python

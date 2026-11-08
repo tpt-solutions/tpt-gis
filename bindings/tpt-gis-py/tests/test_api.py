@@ -2,6 +2,7 @@
 
 import math
 import pickle
+from pathlib import Path
 
 import pytest
 
@@ -137,3 +138,59 @@ def test_coordinates_of_a_collection_walks_its_members():
 
     gc = Geometry.from_wkt("GEOMETRYCOLLECTION (POINT (7 8), LINESTRING (1 1, 2 2))")
     assert coordinates(gc).tolist() == [[7.0, 8.0], [1.0, 1.0], [2.0, 2.0]]
+
+
+FIXTURE_ZIP = Path(__file__).parent / "fixtures" / "places.zip"
+
+
+def test_zipped_shapefile_reads_geometry_and_attributes():
+    import tpt_gis_py
+
+    geometries, attributes = tpt_gis_py.read_zipped_shapefile(FIXTURE_ZIP)
+    assert len(geometries) == 3
+    assert all(g.geometry_type == "Point" for g in geometries)
+    # The .cpg says UTF-8, so the accented names come back intact.
+    assert [row["name"] for row in attributes] == ["Zoë", "Łódź", "Plain"]
+    assert [row["value"] for row in attributes] == [1.5, 2.5, 3.5]
+
+
+def test_zipped_shapefile_without_a_dbf_has_no_attributes(tmp_path):
+    import zipfile
+
+    import tpt_gis_py
+
+    shp_only = tmp_path / "shp_only.zip"
+    with zipfile.ZipFile(FIXTURE_ZIP) as source, zipfile.ZipFile(shp_only, "w") as out:
+        out.writestr("nested/places.shp", source.read("nested/places.shp"))
+    geometries, attributes = tpt_gis_py.read_zipped_shapefile(shp_only)
+    assert len(geometries) == 3
+    assert attributes == []
+
+
+def test_zipped_shapefile_without_a_shp_is_a_value_error(tmp_path):
+    import zipfile
+
+    import pytest
+
+    import tpt_gis_py
+
+    empty = tmp_path / "no_shp.zip"
+    with zipfile.ZipFile(empty, "w") as out:
+        out.writestr("readme.txt", "no shapefile here")
+    with pytest.raises(ValueError, match="no .shp"):
+        tpt_gis_py.read_zipped_shapefile(empty)
+
+
+def test_zipped_shapefile_never_writes_outside_its_temporary_directory(tmp_path):
+    import zipfile
+
+    import tpt_gis_py
+
+    # A member named to escape the temporary directory. Its name must not become a path.
+    crafted = tmp_path / "crafted.zip"
+    with zipfile.ZipFile(FIXTURE_ZIP) as source, zipfile.ZipFile(crafted, "w") as out:
+        for name in source.namelist():
+            out.writestr(f"../escaped/{name.split('/')[-1]}", source.read(name))
+    geometries, _ = tpt_gis_py.read_zipped_shapefile(crafted)
+    assert len(geometries) == 3
+    assert not (tmp_path.parent / "escaped").exists()
