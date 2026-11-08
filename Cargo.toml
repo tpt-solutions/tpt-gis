@@ -31,6 +31,12 @@ authors = ["TPT Solutions"]
 repository = "https://github.com/tpt-solutions/tpt-gis"
 homepage = "https://github.com/tpt-solutions/tpt-gis"
 
+# Release/bench builds: thin LTO + one codegen unit trade a slower release compile for
+# faster binaries (the CLI, benchmarks). Does not affect `cargo test` or dev builds.
+[profile.release]
+lto = "thin"
+codegen-units = 1
+
 [workspace.lints.rust]
 unsafe_code = "deny"
 missing_docs = "warn"
