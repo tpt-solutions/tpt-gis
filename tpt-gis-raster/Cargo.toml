@@ -39,7 +39,7 @@ http = ["std", "dep:reqwest"]
 # Used only by the HTTP streaming reader's unit test to drive its async path.
 tokio = { version = "1", default-features = false, features = ["rt"] }
 # Benchmark harness for the COG streaming read.
-criterion = { version = "0.5", default-features = false }
+criterion = { version = "0.8", default-features = false }
 
 [[bench]]
 name = "cog_stream"
