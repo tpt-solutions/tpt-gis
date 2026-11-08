@@ -17,6 +17,7 @@ members = [
 # - cargo-fuzz harnesses (each needs nightly + cargo-fuzz)
 exclude = [
     "examples/wasm-geofence-demo",
+    "examples/wasm-playground",
     "tpt-gis-io/fuzz",
     "tpt-gis-raster/fuzz",
     "bindings/tpt-gis-py",

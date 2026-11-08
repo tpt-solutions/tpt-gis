@@ -1,0 +1,16 @@
+{
+  "type": "FeatureCollection",
+  "name": "landmarks",
+  "features": [
+    { "type": "Feature", "properties": { "name": "Trafalgar Square" }, "geometry": { "type": "Point", "coordinates": [-0.1281, 51.5080] } },
+    { "type": "Feature", "properties": { "name": "Big Ben" }, "geometry": { "type": "Point", "coordinates": [-0.1246, 51.5007] } },
+    { "type": "Feature", "properties": { "name": "London Eye" }, "geometry": { "type": "Point", "coordinates": [-0.1196, 51.5033] } },
+    { "type": "Feature", "properties": { "name": "Hyde Park Corner" }, "geometry": { "type": "Point", "coordinates": [-0.1528, 51.5027] } },
+    { "type": "Feature", "properties": { "name": "King's Cross" }, "geometry": { "type": "Point", "coordinates": [-0.1238, 51.5308] } },
+    { "type": "Feature", "properties": { "name": "Tower Bridge" }, "geometry": { "type": "Point", "coordinates": [-0.0754, 51.5055] } },
+    { "type": "Feature", "properties": { "name": "Canary Wharf" }, "geometry": { "type": "Point", "coordinates": [-0.0235, 51.5054] } },
+    { "type": "Feature", "properties": { "name": "Greenwich Observatory" }, "geometry": { "type": "Point", "coordinates": [-0.0015, 51.4769] } },
+    { "type": "Feature", "properties": { "name": "Stratford" }, "geometry": { "type": "Point", "coordinates": [-0.0030, 51.5416] } },
+    { "type": "Feature", "properties": { "name": "Heathrow" }, "geometry": { "type": "Point", "coordinates": [-0.4543, 51.4700] } }
+  ]
+}

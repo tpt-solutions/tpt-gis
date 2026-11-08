@@ -1,0 +1,10 @@
+{
+  "type": "FeatureCollection",
+  "name": "areas",
+  "features": [
+    { "type": "Feature", "properties": { "area": "Westminster", "zone": 1 }, "geometry": { "type": "Polygon", "coordinates": [[[-0.1600, 51.4950], [-0.1150, 51.4950], [-0.1150, 51.5150], [-0.1600, 51.5150], [-0.1600, 51.4950]]] } },
+    { "type": "Feature", "properties": { "area": "City", "zone": 1 }, "geometry": { "type": "Polygon", "coordinates": [[[-0.0950, 51.5100], [-0.0700, 51.5100], [-0.0700, 51.5200], [-0.0950, 51.5200], [-0.0950, 51.5100]]] } },
+    { "type": "Feature", "properties": { "area": "Canary Wharf", "zone": 2 }, "geometry": { "type": "Polygon", "coordinates": [[[-0.0300, 51.4990], [-0.0150, 51.4990], [-0.0150, 51.5100], [-0.0300, 51.5100], [-0.0300, 51.4990]], [[-0.0250, 51.5020], [-0.0200, 51.5020], [-0.0200, 51.5050], [-0.0250, 51.5050], [-0.0250, 51.5020]]] } },
+    { "type": "Feature", "properties": { "area": "Greenwich", "zone": 3 }, "geometry": { "type": "Polygon", "coordinates": [[[-0.0100, 51.4700], [0.0100, 51.4700], [0.0100, 51.4850], [-0.0100, 51.4850], [-0.0100, 51.4700]]] } }
+  ]
+}

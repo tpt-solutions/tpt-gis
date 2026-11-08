@@ -1,0 +1,381 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tpt-gis playground</title>
+<style>
+  :root {
+    --bg: #f7f7f5; --fg: #1d1d1b; --muted: #6b6b66; --panel: #ffffff; --line: #d9d9d4;
+    --accent: #2563eb; --points: #b91c1c; --areas: #2563eb; --joined: #15803d; --err: #b91c1c;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #161616; --fg: #ececea; --muted: #9a9a95; --panel: #1f1f1e; --line: #3a3a38;
+      --accent: #60a5fa; --points: #f87171; --areas: #60a5fa; --joined: #4ade80; --err: #f87171;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #161616; --fg: #ececea; --muted: #9a9a95; --panel: #1f1f1e; --line: #3a3a38;
+    --accent: #60a5fa; --points: #f87171; --areas: #60a5fa; --joined: #4ade80; --err: #f87171;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  main { max-width: 1100px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 1.5rem; margin: 8px 0 4px; }
+  p.lead { color: var(--muted); margin: 0 0 16px; }
+  .grid { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr); }
+  @media (min-width: 860px) { .grid { grid-template-columns: 340px minmax(0, 1fr); } }
+  section {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px;
+    margin-bottom: 16px;
+  }
+  section h2 { font-size: 1rem; margin: 0 0 8px; }
+  label { display: block; font-size: 0.85rem; color: var(--muted); margin: 8px 0 2px; }
+  input[type="file"], select, button {
+    font: inherit; width: 100%; max-width: 100%;
+  }
+  select { padding: 6px; background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; }
+  button {
+    margin-top: 8px; padding: 8px 10px; border-radius: 6px; cursor: pointer;
+    background: var(--accent); color: #fff; border: 0;
+  }
+  button.secondary { background: transparent; color: var(--accent); border: 1px solid var(--line); }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .layer { font-size: 0.9rem; margin: 6px 0; }
+  .layer .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; }
+  .muted { color: var(--muted); font-size: 0.85rem; }
+  #status { min-height: 1.5em; font-size: 0.9rem; }
+  #status.error { color: var(--err); }
+  canvas { width: 100%; height: auto; aspect-ratio: 4 / 3; display: block; border-radius: 8px; background: var(--bg); border: 1px solid var(--line); }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; }
+  .row > * { flex: 1 1 auto; }
+  a.download { color: var(--accent); }
+  @media (max-width: 480px) { main { padding: 12px; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>tpt-gis playground</h1>
+  <p class="lead">
+    Load GeoJSON, reproject it and join points to polygons. Everything runs in your browser
+    through WebAssembly; no file is uploaded.
+  </p>
+
+  <div class="grid">
+    <div>
+      <section>
+        <h2>1. Load</h2>
+        <label for="file-points">Points layer (GeoJSON, lon/lat WGS84 unless reprojected)</label>
+        <input id="file-points" type="file" accept=".geojson,.json,application/geo+json">
+        <label for="file-areas">Polygons layer</label>
+        <input id="file-areas" type="file" accept=".geojson,.json,application/geo+json">
+        <div class="row">
+          <button id="load-sample" class="secondary" type="button">Load sample data</button>
+        </div>
+        <p class="muted">Sample: London landmarks and four areas (one with a hole).</p>
+      </section>
+
+      <section>
+        <h2>2. Reproject</h2>
+        <label for="layer-select">Layer</label>
+        <select id="layer-select"></select>
+        <label for="target-crs">Target CRS</label>
+        <select id="target-crs">
+          <option value="4326">EPSG:4326 WGS84 (lon/lat)</option>
+          <option value="3857">EPSG:3857 Web Mercator</option>
+          <option value="32630">EPSG:32630 UTM 30N</option>
+          <option value="32631">EPSG:32631 UTM 31N</option>
+          <option value="2154">EPSG:2154 Lambert-93</option>
+          <option value="5070">EPSG:5070 NAD83 / Conus Albers</option>
+          <option value="27700">EPSG:27700 British National Grid</option>
+          <option value="4277">EPSG:4277 OSGB36</option>
+        </select>
+        <button id="reproject" type="button" disabled>Reproject layer</button>
+      </section>
+
+      <section>
+        <h2>3. Join</h2>
+        <p class="muted">Keeps each point that falls inside a polygon, and merges the polygon's
+          properties into it. Both layers must be in the same CRS.</p>
+        <button id="join" type="button" disabled>Join points to polygons</button>
+        <div id="join-result" class="muted"></div>
+      </section>
+
+      <div id="status" role="status" aria-live="polite">Loading WebAssembly…</div>
+    </div>
+
+    <div>
+      <section>
+        <h2>Map</h2>
+        <canvas id="map" width="800" height="600" aria-label="Map of the loaded layers"></canvas>
+        <div class="muted" style="margin-top:8px">
+          <span style="color:var(--points)">●</span> points &nbsp;
+          <span style="color:var(--areas)">■</span> polygons &nbsp;
+          <span style="color:var(--joined)">●</span> join result.
+          Coordinates are drawn as plain x/y in each layer's own CRS.
+        </div>
+      </section>
+      <section>
+        <h2>Layers</h2>
+        <div id="layers" class="muted">No layers loaded.</div>
+      </section>
+    </div>
+  </div>
+</main>
+
+<script type="module">
+  // The page works from a plain HTTP server; open it through one (see README.md).
+  import init, { reproject, join } from "./pkg/wasm_playground.js";
+
+  const $ = (id) => document.getElementById(id);
+  const statusEl = $("status");
+  const canvas = $("map");
+  const ctx = canvas.getContext("2d");
+
+  // name -> { label, color, text, crs, features } ; text is GeoJSON as loaded or last produced.
+  const layers = {};
+  let wasmReady = false;
+
+  function setStatus(message, isError = false) {
+    statusEl.textContent = message;
+    statusEl.classList.toggle("error", isError);
+  }
+
+  function describe(text) {
+    const fc = JSON.parse(text);
+    return fc.features || [];
+  }
+
+  function countSummary(features) {
+    const kinds = {};
+    for (const f of features) {
+      const t = f.geometry ? f.geometry.type : "null";
+      kinds[t] = (kinds[t] || 0) + 1;
+    }
+    return Object.entries(kinds).map(([k, n]) => `${n} ${k}`).join(", ") || "empty";
+  }
+
+  function renderLayers() {
+    const names = Object.keys(layers);
+    if (names.length === 0) {
+      $("layers").textContent = "No layers loaded.";
+    } else {
+      $("layers").innerHTML = names.map((n) => {
+        const l = layers[n];
+        return `<div class="layer"><span class="dot" style="background:${l.color}"></span>` +
+          `<strong>${l.label}</strong> · ${l.features.length} features (${countSummary(l.features)})` +
+          ` · EPSG:${l.crs}</div>`;
+      }).join("");
+    }
+    const select = $("layer-select");
+    const previous = select.value;
+    select.innerHTML = names.map((n) => `<option value="${n}">${layers[n].label}</option>`).join("");
+    if (names.includes(previous)) select.value = previous;
+    $("reproject").disabled = names.length === 0 || !wasmReady;
+    $("join").disabled = !(layers.points && layers.areas) || !wasmReady;
+    draw();
+  }
+
+  function setLayer(name, label, color, text, crs) {
+    layers[name] = { label, color, text, crs, features: describe(text) };
+    renderLayers();
+  }
+
+  async function loadFile(file, name, label, color) {
+    try {
+      const text = await file.text();
+      setLayer(name, label, color, text, 4326);
+      setStatus(`Loaded ${file.name}.`);
+    } catch (e) {
+      setStatus(`Could not read ${file.name}: ${e.message || e}`, true);
+    }
+  }
+
+  $("file-points").addEventListener("change", (e) => {
+    const f = e.target.files[0]; if (f) loadFile(f, "points", "Points", getCss("--points"));
+  });
+  $("file-areas").addEventListener("change", (e) => {
+    const f = e.target.files[0]; if (f) loadFile(f, "areas", "Polygons", getCss("--areas"));
+  });
+
+  $("load-sample").addEventListener("click", async () => {
+    try {
+      const [points, areas] = await Promise.all([
+        fetch("samples/points.geojson").then((r) => r.text()),
+        fetch("samples/areas.geojson").then((r) => r.text()),
+      ]);
+      setLayer("points", "Points", getCss("--points"), points, 4326);
+      setLayer("areas", "Polygons", getCss("--areas"), areas, 4326);
+      setStatus("Loaded the sample layers.");
+    } catch (e) {
+      setStatus(`Could not load the sample: ${e.message || e}`, true);
+    }
+  });
+
+  $("reproject").addEventListener("click", () => {
+    const name = $("layer-select").value;
+    const layer = layers[name];
+    const to = Number($("target-crs").value);
+    try {
+      const text = reproject(layer.text, layer.crs, to);
+      setLayer(name, layer.label, layer.color, text, to);
+      setStatus(`Reprojected ${layer.label.toLowerCase()} from EPSG:${layer.crs} to EPSG:${to}.`);
+    } catch (e) {
+      setStatus(`Reprojection failed: ${e.message || e}`, true);
+    }
+  });
+
+  let joined = null;
+
+  $("join").addEventListener("click", () => {
+    const points = layers.points, areas = layers.areas;
+    if (points.crs !== areas.crs) {
+      setStatus(`The layers are in different CRSs (EPSG:${points.crs} and EPSG:${areas.crs}). ` +
+        `Reproject one so they match.`, true);
+      return;
+    }
+    try {
+      const text = join(points.text, areas.text);
+      const features = describe(text);
+      joined = { label: "Join result", color: getCss("--joined"), text, crs: points.crs, features };
+      $("join-result").innerHTML =
+        `${features.length} match${features.length === 1 ? "" : "es"} from ${points.features.length} points ` +
+        `(a point inside overlapping polygons counts once per polygon). ` +
+        `<a class="download" id="download" href="#">Download GeoJSON</a>`;
+      $("download").addEventListener("click", (ev) => {
+        ev.preventDefault();
+        const url = URL.createObjectURL(new Blob([text], { type: "application/geo+json" }));
+        const a = Object.assign(document.createElement("a"), { href: url, download: "join.geojson" });
+        a.click();
+        URL.revokeObjectURL(url);
+      });
+      setStatus(`Joined ${features.length} point${features.length === 1 ? "" : "s"}.`);
+      draw();
+    } catch (e) {
+      setStatus(`Join failed: ${e.message || e}`, true);
+    }
+  });
+
+  // ---- drawing ----------------------------------------------------------------
+
+  function getCss(name) {
+    return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || "#2563eb";
+  }
+
+  function allCoords(geometry, out) {
+    if (!geometry) return out;
+    const walk = (c) => {
+      if (typeof c[0] === "number") out.push(c);
+      else c.forEach(walk);
+    };
+    if (geometry.type === "GeometryCollection") {
+      geometry.geometries.forEach((g) => allCoords(g, out));
+    } else {
+      walk(geometry.coordinates);
+    }
+    return out;
+  }
+
+  function draw() {
+    const dpr = window.devicePixelRatio || 1;
+    const w = canvas.width / dpr, h = canvas.height / dpr;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+
+    const all = [];
+    const sets = [layers.areas, layers.points, joined].filter(Boolean);
+    for (const set of sets) for (const f of set.features) allCoords(f.geometry, all);
+    if (all.length === 0) {
+      ctx.fillStyle = getCss("--muted");
+      ctx.font = "16px system-ui, sans-serif";
+      ctx.fillText("Load or reproject a layer to see it here.", 24, h / 2);
+      return;
+    }
+
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const [x, y] of all) {
+      if (x < minX) minX = x; if (x > maxX) maxX = x;
+      if (y < minY) minY = y; if (y > maxY) maxY = y;
+    }
+    const pad = 24;
+    const spanX = maxX - minX || 1, spanY = maxY - minY || 1;
+    const scale = Math.min((w - 2 * pad) / spanX, (h - 2 * pad) / spanY);
+    const offX = (w - spanX * scale) / 2, offY = (h - spanY * scale) / 2;
+    // Flip y so north is up.
+    const tx = (x) => offX + (x - minX) * scale;
+    const ty = (y) => h - (offY + (y - minY) * scale);
+
+    const pathRings = (rings) => {
+      ctx.beginPath();
+      for (const ring of rings) {
+        ring.forEach(([x, y], i) => (i ? ctx.lineTo(tx(x), ty(y)) : ctx.moveTo(tx(x), ty(y))));
+        ctx.closePath();
+      }
+    };
+
+    for (const f of layers.areas ? layers.areas.features : []) {
+      const g = f.geometry;
+      if (!g) continue;
+      const polys = g.type === "Polygon" ? [g.coordinates] : g.type === "MultiPolygon" ? g.coordinates : [];
+      for (const rings of polys) {
+        pathRings(rings);
+        ctx.fillStyle = hexAlpha(layers.areas.color, 0.18);
+        ctx.strokeStyle = layers.areas.color;
+        ctx.lineWidth = 1.5;
+        ctx.fill("evenodd");
+        ctx.stroke();
+      }
+    }
+
+    const dot = (color, [x, y], r) => {
+      ctx.beginPath();
+      ctx.arc(tx(x), ty(y), r, 0, Math.PI * 2);
+      ctx.fillStyle = color;
+      ctx.fill();
+    };
+    for (const f of layers.points ? layers.points.features : []) {
+      if (f.geometry && f.geometry.type === "Point") dot(layers.points.color, f.geometry.coordinates, 4);
+    }
+    if (joined) {
+      for (const f of joined.features) {
+        if (f.geometry && f.geometry.type === "Point") dot(joined.color, f.geometry.coordinates, 6);
+      }
+    }
+  }
+
+  // Turn a CSS colour (#rrggbb) into rgba with the given alpha.
+  function hexAlpha(hex, alpha) {
+    const m = /^#?([0-9a-f]{6})$/i.exec(hex);
+    if (!m) return hex;
+    const n = parseInt(m[1], 16);
+    return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
+  }
+
+  // Keep the canvas sharp on high-DPI screens.
+  function sizeCanvas() {
+    const dpr = window.devicePixelRatio || 1;
+    const cssWidth = canvas.clientWidth || 800;
+    canvas.width = Math.round(cssWidth * dpr);
+    canvas.height = Math.round((cssWidth * 0.75) * dpr);
+    draw();
+  }
+  window.addEventListener("resize", sizeCanvas);
+
+  // ---- start ------------------------------------------------------------------
+
+  try {
+    await init();
+    wasmReady = true;
+    setStatus("Ready. Load a sample or your own GeoJSON to begin.");
+  } catch (e) {
+    setStatus(`WebAssembly failed to load: ${e.message || e}`, true);
+  }
+  renderLayers();
+  sizeCanvas();
+</script>
+</body>
+</html>
