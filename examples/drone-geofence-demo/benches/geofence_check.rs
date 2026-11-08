@@ -9,7 +9,9 @@
 //! follow-up (see `todo.md`).
 #![allow(missing_docs)] // criterion's macros generate undocumented items.
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use std::hint::black_box;
+
+use criterion::{criterion_group, criterion_main, Criterion};
 use drone_geofence_demo::check_position;
 use tpt_gis_core::GeoPoint;
 

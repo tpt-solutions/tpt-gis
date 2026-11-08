@@ -16,3 +16,5 @@ name = "geotiff"
 path = "fuzz_targets/geotiff.rs"
 test = false
 doc = false
+
+[workspace]
