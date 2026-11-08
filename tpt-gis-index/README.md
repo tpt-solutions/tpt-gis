@@ -20,6 +20,10 @@ from-scratch, pure-Rust implementation using a Z-order (Morton) cell scheme — 
 bit-compatible with Google's Hilbert-curve S2; treat its tokens as internal to this
 crate unless a true Hilbert mapping is added (see the `s2` module docs).
 
+## Features
+
+None. Every index and join is always compiled in.
+
 ## Modules
 
 - **`rtree`** — Guttman R-tree with one-at-a-time `insert`, `remove`, Sort-Tile-Recursive

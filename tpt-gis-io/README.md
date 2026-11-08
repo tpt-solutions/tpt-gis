@@ -24,6 +24,11 @@ without any C FFI (the GeoPackage reader and writer are pure Rust, no `libsqlite
 tpt-gis-io = { git = "https://github.com/tpt-solutions/tpt-gis" }
 ```
 
+## Features
+
+None. Every format is always compiled in. The crate needs `std` (it reads and writes
+files and byte streams), so it is not `no_std`.
+
 ## Modules
 
 - **`geometry`** — the shared owned `Geometry` / `Polygon` types produced and consumed by every
