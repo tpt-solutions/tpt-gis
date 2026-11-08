@@ -17,6 +17,9 @@ release will be `0.1.0`.
 - `geodesic_distance`, `geodesic_inverse`, `geodesic_destination` on the WGS84 and GRS80
   ellipsoids (Karney's algorithm).
 - `read_shapefile_geometry` and `read_shapefile_attributes`.
+- `read_zipped_shapefile` — reads a shapefile from a `.zip` archive, returning geometries and
+  attributes; a missing `.dbf` gives no attributes, and an archive without a `.shp` is a
+  `ValueError`.
 - `coordinates(geometry)` — every vertex as an `(n, 2)` NumPy array (NumPy is imported lazily).
 - Exception hierarchy: `TptGisError` (a `ValueError` subclass), `GeometryParseError` and
   `GeodesyError`.

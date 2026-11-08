@@ -10,7 +10,7 @@ below is therefore under **Unreleased**; the first release will be `0.1.0`.
 
 ### Added
 - `tpt-gis-core`: CRS registry (WGS84, Web Mercator, UTM, RGF93 / Lambert-93 EPSG:2154, NAD83 /
-  Conus Albers EPSG:5070) with `epsg::lookup`; projections (Web Mercator, UTM, generic
+  Conus Albers EPSG:5070, OSGB36 / British National Grid EPSG:27700) with `epsg::lookup`; projections (Web Mercator, UTM, generic
   Transverse Mercator, Lambert Conformal Conic, Albers, local tangent plane); geodesics on the
   ellipsoid (Karney inverse/direct, polygon area and perimeter, equal-step sampling); datum
   transforms (geodetic/ECEF and 7-parameter Helmert); general `crs::transform` between supported
@@ -21,6 +21,7 @@ below is therefore under **Unreleased**; the first release will be `0.1.0`.
   `alloc`, polygon `union` / `intersection` / `difference` / `symmetric_difference` and `buffer`.
 - `tpt-gis-io`: GeoJSON, WKT, WKB, Shapefile and GeoPackage readers; GeoJSON, WKT, WKB, Shapefile
   (`.shp`/`.shx`/`.dbf`) and GeoPackage writers, including a GeoPackage R-tree spatial index.
+  GeoPackage readers also accept `WITHOUT ROWID` tables.
 - `tpt-gis-index`: R-tree (incremental and STR bulk load, nearest-neighbour queries), quadtree,
   H3 (via `h3o`) and S2-style cell indexes with polygon coverings, and R-tree-accelerated
   points-in-polygons spatial joins.
@@ -30,7 +31,8 @@ below is therefore under **Unreleased**; the first release will be `0.1.0`.
 - `tpt-gis-cli` (binary `tptgis`): `spatial-join`, `reproject`, `convert`, `info`, `validate`,
   `geofence-compile`, `generate-fixtures` and `completions` subcommands.
 - `tpt-gis`: facade crate re-exporting the engine crates behind feature flags, with a `prelude`.
-- `tpt-gis-py`: Python bindings (pyo3 + maturin) for geometry I/O, containment, shapefile reading,
+- `tpt-gis-py`: Python bindings (pyo3 + maturin) for geometry I/O, containment, shapefile and
+  zipped shapefile reading,
   geodesy, NumPy vertex arrays, type stubs and a `TptGisError` exception hierarchy.
 - Examples: `spatial-join-cli` (benchmark host), `drone-geofence-demo` (`no_std` geofence) and
   `wasm-geofence-demo` (browser harness).

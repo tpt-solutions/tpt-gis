@@ -13,8 +13,9 @@ planetary-scale GIS engine. Built with [pyo3](https://pyo3.rs) and
   value equality, hashing and pickling.
 - **`coordinates(geometry)`** — every vertex as an `(n, 2)` float64 NumPy array. NumPy is
   imported only when you call it.
-- **Shapefile reading** — `read_shapefile_geometry` (`.shp`) and `read_shapefile_attributes`
-  (`.dbf`). The readers release the GIL while they parse.
+- **Shapefile reading** — `read_shapefile_geometry` (`.shp`), `read_shapefile_attributes`
+  (`.dbf`) and `read_zipped_shapefile` (a shapefile inside a `.zip`). The readers release the GIL
+  while they parse.
 - **Geodesy** — `GeoPoint`, `geodesic_distance`, `geodesic_inverse` and `geodesic_destination` on
   the WGS84 and GRS80 ellipsoids (Karney's algorithm).
 - **Errors** — `TptGisError` (a `ValueError` subclass), with `GeometryParseError` and
@@ -22,7 +23,7 @@ planetary-scale GIS engine. Built with [pyo3](https://pyo3.rs) and
 - **Types** — `py.typed` and `.pyi` stubs ship with the package.
 
 Not yet exposed to Python: raster and COG, the index crate, GeoPackage, projections,
-zipped shapefiles, and a prebuilt wheel matrix.
+and a prebuilt wheel matrix.
 
 ## Build and install (development)
 
