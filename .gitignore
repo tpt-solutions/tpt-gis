@@ -30,3 +30,6 @@ Thumbs.db
 
 # Built Python extensions (maturin develop writes these into the source tree)
 *.pyd
+
+# Staged GitHub Pages site for the browser playground (built by .github/workflows/pages.yml)
+**/site/

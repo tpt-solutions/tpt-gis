@@ -1,0 +1,70 @@
+name: Pages
+
+# Builds the browser playground (examples/wasm-playground) and publishes it to GitHub Pages.
+# Every pull request builds it, so a break is caught before merge. Only pushes to master
+# (and manual runs on master) deploy.
+#
+# One-time repo setting: Settings > Pages > Build and deployment > Source: "GitHub Actions".
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    name: build playground
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: taiki-e/install-action@3a3daafd3b7f23b8f65d9f5ba2db203fb59b79e2 # v2
+        with:
+          # Must match the wasm-bindgen version pinned in examples/wasm-playground/Cargo.toml.
+          tool: wasm-bindgen@0.2.126
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          workspaces: examples/wasm-playground
+      - name: Build WebAssembly
+        working-directory: examples/wasm-playground
+        run: cargo build --release --target wasm32-unknown-unknown
+      - name: Generate JavaScript bindings
+        working-directory: examples/wasm-playground
+        run: >
+          wasm-bindgen --target web --out-dir site/pkg
+          target/wasm32-unknown-unknown/release/wasm_playground.wasm
+      - name: Assemble the site
+        run: |
+          cp examples/wasm-playground/index.html examples/wasm-playground/site/
+          cp -r examples/wasm-playground/samples examples/wasm-playground/site/
+      - name: Upload the site
+        if: github.ref == 'refs/heads/master' && github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: examples/wasm-playground/site
+
+  deploy:
+    name: deploy to GitHub Pages
+    needs: build
+    if: github.ref == 'refs/heads/master' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
