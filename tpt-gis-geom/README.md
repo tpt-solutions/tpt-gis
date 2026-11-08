@@ -1,6 +1,6 @@
 # tpt-gis-geom
 
-Vector geometry primitives and topological predicates for the
+Vector geometry primitives, topological predicates, overlay and buffering for the
 [`tpt-gis`](https://github.com/tpt-solutions/tpt-gis) engine.
 
 This crate is `no_std` by default. Geometries **borrow** their point data
@@ -8,42 +8,55 @@ This crate is `no_std` by default. Geometries **borrow** their point data
 data with zero heap allocation — the requirement that drives the embedded drone
 geofence use case.
 
+> **Status:** not yet published to crates.io. Depend on it by path or git, for example
+> `tpt-gis-geom = { git = "https://github.com/tpt-solutions/tpt-gis" }`.
+
 ## Why
 
-The geometry layer is deliberately small and allocation-free. It gives you the OGC
-Simple Features primitives (`Point`, `LineString`, `Polygon`), bounding boxes, and
-the predicates (containment, intersection, distance) that everything else — spatial
-indexes, file parsers, the geofence engine — builds on.
+The geometry layer is deliberately small and allocation-free where it can be. It gives
+you the OGC Simple Features primitives (`Point`, `LineString`, `Polygon`, and the
+multi-geometries), bounding boxes, and the predicates (containment, intersection,
+distance, the DE-9IM matrix) that everything else — spatial indexes, file parsers, the
+geofence engine — builds on. Polygon overlay and buffering allocate, so they sit behind
+the `alloc` feature.
 
 ## Installation
 
-```sh
-cargo add tpt-gis-geom
+```toml
+[dependencies]
+tpt-gis-geom = { git = "https://github.com/tpt-solutions/tpt-gis", features = ["alloc"] }
 ```
 
 ## Features
 
-| Feature | Default | Description                                          |
-| ------- | ------- | ---------------------------------------------------- |
-| `std`   | off     | Opt into the standard library where helpful.         |
-| `alloc` | off     | Enable `alloc`-only APIs (owned scratch buffers).    |
-| `serde` | off     | Derive `Serialize`/`Deserialize` on the primitives.  |
+| Feature | Default | Description                                                    |
+| ------- | ------- | -------------------------------------------------------------- |
+| `std`   | off     | Opt into the standard library where helpful.                   |
+| `alloc` | off     | Enables `clip` (overlay), `buffer`, and the DE-9IM `relate`.   |
 
 ## Modules
 
-- **`point`** — `Point`, a planar `(x, y)` coordinate (unitless; the CRS decides
-  what the numbers mean).
-- **`line_string`** — `LineString`, an ordered borrowed path with `length()` and
-  segment iteration.
-- **`polygon`** — `Polygon`, an exterior ring with zero or more interior rings
-  (holes); `contains_point` and `nearest_boundary_point`.
-- **`bbox`** — `Rect`, an axis-aligned bounding box with `contains_point`,
-  `intersects`, `union`, `from_points`.
-- **`distance`** — planar point/segment/line distances (Cartesian; for ellipsoidal
+- **`point`** — `Point`, a planar `(x, y)` coordinate (unitless; the CRS decides what the
+  numbers mean).
+- **`line_string`** — `LineString`, an ordered borrowed path with `length()` and segment
+  iteration.
+- **`polygon`** — `Polygon`, an exterior ring with zero or more interior rings (holes);
+  `contains_point` and `nearest_boundary_point`.
+- **`multi`** — `MultiPoint`, `MultiLineString`, `MultiPolygon`, and `GeometryRef`.
+- **`bbox`** — `Rect`, an axis-aligned bounding box with `contains_point`, `intersects`,
+  `union`, `from_points`.
+- **`distance`** — planar point, segment and line distances (Cartesian; for ellipsoidal
   distance between lon/lat use `tpt-gis-core`'s `geodesic`).
-- **`predicates`** — `point_in_ring`, `segments_intersect`,
-  `linestrings_intersect`, `polygons_intersect`, `polygon_contains_polygon`
+- **`measure`**, **`validity`**, **`hull`**, **`simplify`** — ring area and centroid,
+  polygon validity (`is_valid`), convex hull, and simplification.
+- **`predicates`** — `point_in_ring`, `segments_intersect`, `linestrings_intersect`,
+  `polygons_intersect`, `polygon_contains_polygon`, `polygons_touch`, `polygons_overlap`
   (EPSILON-tolerant).
+- **`relate`** / **`de9im`** *(alloc)* — the full DE-9IM intersection matrix of two
+  geometries, with `IntersectionMatrix::matches` for patterns such as `T*F**FFF*`.
+- **`clip`** *(alloc)* — polygon `union`, `intersection`, `difference`, `symmetric_difference`.
+- **`buffer`** *(alloc)* — `buffer_point`, `buffer_line`, `buffer_polygon`. Negative distances
+  erode a polygon; holes are handled.
 
 ## Examples
 
@@ -84,11 +97,12 @@ assert_eq!(nearest, Point::new(0.0, 5.0));
 ```rust
 use tpt_gis_geom::{distance, LineString, Point};
 
-let line = LineString::new(&[
+let pts = [
     Point::new(0.0, 0.0),
     Point::new(3.0, 4.0),
     Point::new(3.0, 0.0),
-]);
+];
+let line = LineString::new(&pts);
 assert_eq!(line.length(), 9.0); // 5.0 + 4.0
 
 let d = distance::point_to_segment(
@@ -104,30 +118,52 @@ assert_eq!(d, 5.0);
 ```rust
 use tpt_gis_geom::{predicates, Point, Polygon};
 
-let a = Polygon::from_exterior(&[
+let ring_a = [
     Point::new(0.0, 0.0), Point::new(10.0, 0.0),
     Point::new(10.0, 10.0), Point::new(0.0, 10.0), Point::new(0.0, 0.0),
-]);
-let b = Polygon::from_exterior(&[
+];
+let ring_b = [
     Point::new(5.0, 5.0), Point::new(15.0, 5.0),
     Point::new(15.0, 15.0), Point::new(5.0, 15.0), Point::new(5.0, 5.0),
-]);
-assert!(predicates::polygons_intersect(&a, &b));
-assert!(predicates::polygon_contains_polygon(&a, &Polygon::from_exterior(&[
+];
+let ring_c = [
     Point::new(2.0, 2.0), Point::new(8.0, 2.0),
     Point::new(8.0, 8.0), Point::new(2.0, 8.0), Point::new(2.0, 2.0),
-])));
+];
+let a = Polygon::from_exterior(&ring_a);
+let b = Polygon::from_exterior(&ring_b);
+assert!(predicates::polygons_intersect(&a, &b));
+assert!(predicates::polygon_contains_polygon(&a, &Polygon::from_exterior(&ring_c)));
 ```
 
-> **Not yet implemented:** Boolean set operations (`buffer`, `union`,
-> `difference`) require a general polygon-clipping algorithm and are tracked as
-> follow-up work.
+### Polygon overlay and buffer *(requires `alloc`)*
+
+```rust
+use tpt_gis_geom::{buffer, clip, Point, Polygon};
+
+let ring_a = [
+    Point::new(0.0, 0.0), Point::new(10.0, 0.0),
+    Point::new(10.0, 10.0), Point::new(0.0, 10.0), Point::new(0.0, 0.0),
+];
+let ring_b = [
+    Point::new(5.0, 5.0), Point::new(15.0, 5.0),
+    Point::new(15.0, 15.0), Point::new(5.0, 15.0), Point::new(5.0, 5.0),
+];
+let a = Polygon::from_exterior(&ring_a);
+let b = Polygon::from_exterior(&ring_b);
+
+// Each result is a Vec of owned polygons.
+let overlap = clip::intersection(&a, &b);
+let merged = clip::union(&a, &b);
+let rounded = buffer::buffer_point(Point::new(0.0, 0.0), 1.0, 16);
+```
 
 ## `no_std`
 
-`Point`, `LineString`, `Polygon`, `Rect` and all predicates are `no_std`-clean and
-heap-allocation-free. The `drone-geofence-demo` in the workspace runs the geofence
-check directly on a `thumbv7em-none-eabihf` target with `--no-default-features`.
+`Point`, `LineString`, `Polygon`, `Rect`, the multi-geometries and the predicates are
+`no_std`-clean and heap-allocation-free. CI cross-compiles this crate for
+`thumbv7em-none-eabihf`, `riscv32imc-unknown-none-elf`, `wasm32-unknown-unknown` and
+`wasm32-wasip1`.
 
 ## License
 
