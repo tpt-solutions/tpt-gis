@@ -26,6 +26,10 @@ allow = [
     "Unicode-3.0",
     "Zlib",
     "CC0-1.0",
+    # Permissive data license (no copyleft). Pulled in only as the Mozilla CA
+    # bundle via `webpki-roots` (rustls TLS root store, reached through the
+    # `http` feature's reqwest dependency).
+    "CDLA-Permissive-2.0",
 ]
 confidence-threshold = 0.8
 
