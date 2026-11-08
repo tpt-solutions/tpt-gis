@@ -5,7 +5,7 @@ name: Wheels
 # tags, and this workflow exists to check the build matrix ahead of a release. Run it by hand.
 #
 # Targets: Linux x86_64 (manylinux and musllinux), macOS universal2 (Intel and Apple silicon),
-# and Windows x64. Linux aarch64 is not built here yet.
+# Windows x64, and Linux aarch64 (built on GitHub's arm64 runner, not under emulation).
 
 on:
   workflow_dispatch:
@@ -33,6 +33,10 @@ jobs:
           - name: musllinux-x86_64
             os: ubuntu-latest
             manylinux: musllinux_1_2
+            args: --release --out dist
+          - name: manylinux-aarch64
+            os: ubuntu-24.04-arm
+            manylinux: auto
             args: --release --out dist
           - name: macos-universal2
             os: macos-latest

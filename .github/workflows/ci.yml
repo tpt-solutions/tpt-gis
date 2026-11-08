@@ -156,18 +156,43 @@ jobs:
 
 
   publish-python:
-    name: Build & publish Python wheels (PyPI)
+    name: Build & publish Python wheels (${{ matrix.name }})
     if: startsWith(github.ref, 'refs/tags/')
     needs: python-bindings
     runs-on: ${{ matrix.os }}
+    # Keep this matrix in step with .github/workflows/wheels.yml, the build matrix
+    # checked by hand before a release.
     strategy:
+      fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        include:
+          - name: manylinux-x86_64
+            os: ubuntu-latest
+            manylinux: auto
+            args: --release --out dist
+          - name: musllinux-x86_64
+            os: ubuntu-latest
+            manylinux: musllinux_1_2
+            args: --release --out dist
+          - name: manylinux-aarch64
+            os: ubuntu-24.04-arm
+            manylinux: auto
+            args: --release --out dist
+          - name: macos-universal2
+            os: macos-latest
+            manylinux: ""
+            args: --release --out dist --target universal2-apple-darwin
+          - name: windows-x86_64
+            os: windows-latest
+            manylinux: ""
+            args: --release --out dist
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: stable
+          # universal2 needs both Apple targets, which the action does not install itself.
+          targets: ${{ matrix.name == 'macos-universal2' && 'x86_64-apple-darwin,aarch64-apple-darwin' || '' }}
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.11"
@@ -176,8 +201,8 @@ jobs:
         with:
           working-directory: bindings/tpt-gis-py
           command: build
-          args: --release --out dist
-          manylinux: auto
+          args: ${{ matrix.args }}
+          manylinux: ${{ matrix.manylinux }}
       - name: Publish wheels to PyPI
         working-directory: bindings/tpt-gis-py
         env:
