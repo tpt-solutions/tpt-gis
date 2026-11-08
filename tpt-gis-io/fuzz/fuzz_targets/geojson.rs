@@ -1,3 +1,4 @@
+#![no_main]
 #![allow(clippy::missing_docs_in_private_items)]
 
 use libfuzzer_sys::fuzz_target;
