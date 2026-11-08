@@ -3,14 +3,15 @@
 [![CI](https://github.com/tpt-solutions/tpt-gis/actions/workflows/ci.yml/badge.svg)](https://github.com/tpt-solutions/tpt-gis/actions/workflows/ci.yml)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE-MIT)
 [![MSRV](https://img.shields.io/badge/MSRV-1.87-blue)](https://www.rust-lang.org)
-[![PyPI](https://img.shields.io/pypi/v/tpt-gis-py.svg)](https://pypi.org/project/tpt-gis-py/)
 
 A pure Rust, planetary-scale Geographic Information Systems engine — a zero-FFI
 replacement for the GDAL/PROJ/GEOS stack, with `no_std` support for edge/embedded
 targets and cloud-native streaming for planetary-scale raster/vector data.
 
 **License:** Dual [MIT](LICENSE-MIT) / [Apache-2.0](LICENSE-APACHE), at your option.
-**Status:** Active development — see [`todo.md`](todo.md) for the full roadmap.
+**Status:** Pre-release. Nothing is published to crates.io or PyPI yet, so the install
+steps below build from this repository. See [`CHANGELOG.md`](CHANGELOG.md) for what has
+changed and [`todo.md`](todo.md) for the roadmap.
 
 ## Why
 
@@ -25,28 +26,43 @@ formats from scratch in safe, `no_std`-capable Rust: zero-FFI coordinate
 transformations, high-performance spatial indexing, and modern cloud-native
 raster/vector parsing.
 
+## Crates
+
+| Crate | What it provides | `no_std` |
+| ----- | ---------------- | -------- |
+| [`tpt-gis-core`](tpt-gis-core) | CRS registry, projections, Karney geodesics, datum transforms | Yes |
+| [`tpt-gis-geom`](tpt-gis-geom) | OGC geometry, predicates, DE-9IM, overlay and buffer | Yes (overlay and buffer need `alloc`) |
+| [`tpt-gis-io`](tpt-gis-io) | GeoJSON, WKT, WKB, Shapefile and GeoPackage readers and writers | No |
+| [`tpt-gis-index`](tpt-gis-index) | R-trees, quadtrees, H3 and S2 grids, spatial joins | No |
+| [`tpt-gis-raster`](tpt-gis-raster) | Grids, map algebra, resampling, GeoTIFF and COG read/write | Grid, algebra and resample only |
+| [`tpt-gis`](tpt-gis) | Facade crate that re-exports the five crates behind feature flags | Via features |
+| [`tpt-gis-cli`](tpt-gis-cli) | The `tptgis` command-line tool | No |
+| [`bindings/tpt-gis-py`](bindings/tpt-gis-py) | Python bindings (`tpt_gis_py`) | No |
+
 ## Architecture
 
 ```
 tpt-gis/
 ├── tpt-gis-core      # CRS definitions, datum transformations, geodesic math (no_std)
 ├── tpt-gis-geom      # Vector geometry (points, lines, polygons), topological ops (no_std)
-├── tpt-gis-raster    # Grid data, map algebra, Cloud Optimized GeoTIFF (COG) parsing
-├── tpt-gis-io        # Parsers/writers for GeoJSON, WKB/WKT, Shapefile, GeoPackage
+├── tpt-gis-raster    # Grid data, map algebra, GeoTIFF / Cloud Optimized GeoTIFF (COG)
+├── tpt-gis-io        # Parsers and writers for GeoJSON, WKB/WKT, Shapefile, GeoPackage
 ├── tpt-gis-index     # R-Trees, Quadtrees, H3/S2 hexagonal grid integration
-└── tpt-gis           # Facade crate re-exporting the five crates behind feature flags
+├── tpt-gis           # Facade crate re-exporting the five crates behind feature flags
+├── tpt-gis-cli       # `tptgis` command-line tool
+└── bindings/tpt-gis-py  # Python bindings
 ```
 
 See [`spec.txt`](spec.txt) for the full design document, [`todo.md`](todo.md) for
-the phased task breakdown, and [`docs/`](docs/) for usage guides.
+the phased task breakdown, and [`docs/`](docs) for guides.
 
-## Quickstart
+## Quickstart (Rust)
 
-Add the facade crate to your `Cargo.toml`:
+Until a release is published, depend on the facade crate from git:
 
 ```toml
 [dependencies]
-tpt-gis = "0.1"
+tpt-gis = { git = "https://github.com/tpt-solutions/tpt-gis" }
 ```
 
 Then use any of the engine crates behind feature flags. Most users only need the
@@ -78,20 +94,25 @@ For cloud-native raster, enable `raster` and `http` to stream a remote Cloud
 Optimized GeoTIFF without downloading the whole file (see
 [`tpt-gis-raster`](tpt-gis-raster)).
 
-## Python bindings
-
-`tpt-gis` ships first-class Python bindings — [`tpt-gis-py`](bindings/tpt-gis-py),
-built with [pyo3](https://pyo3.rs) + [maturin](https://github.com/PyO3/maturin) — so
-you can use the geometry, format, and geodesy engines from Python without leaving the
-Rust safety model.
-
-Install from PyPI (wheels for Linux/macOS/Windows, Python 3.8+):
+## Command-line tool
 
 ```sh
-pip install tpt-gis-py
+cargo install --path tpt-gis-cli       # installs the `tptgis` binary
+
+tptgis info cities.geojson
+tptgis spatial-join --points points.geojson --polygons zones.geojson --output joined.geojson
+tptgis convert roads.shp --to gpkg --output roads.gpkg
 ```
 
-Or build from source:
+Subcommands: `spatial-join`, `reproject`, `convert`, `info`, `validate`,
+`geofence-compile`, `generate-fixtures` and `completions`. See
+[`tpt-gis-cli`](tpt-gis-cli/README.md) and [CLI usage](docs/cli-usage.md).
+
+## Python bindings
+
+`tpt-gis` ships Python bindings — [`tpt-gis-py`](bindings/tpt-gis-py), built with
+[pyo3](https://pyo3.rs) and [maturin](https://github.com/PyO3/maturin). Build from source
+(Python 3.8+):
 
 ```sh
 cd bindings/tpt-gis-py
@@ -110,40 +131,39 @@ paris = gis.GeoPoint(48.8566, 2.3522)
 gis.geodesic_distance(london, paris)  # ≈ 343_500 m on WGS84
 ```
 
-See [Python bindings](docs/python-bindings.md) for the full API (WKT/WKB/GeoJSON
-round-trip, shapefile reading, geodesic inverse/direct) and the current v0.1 scope
-(raster/COG, the index crate, GeoPackage, projections, and numpy interop are
-deferred).
+See [Python bindings](docs/python-bindings.md) for the full API. Raster/COG, the index
+crate, GeoPackage and projections are not yet exposed to Python.
 
-## Building
+## Building and testing
 
 ```sh
 cargo build --workspace
 cargo test --workspace
 ```
 
-`tpt-gis-core` and `tpt-gis-geom` are `no_std` by default (enable the `std` feature
-for host-native math intrinsics) and are verified to cross-compile for embedded
-(`thumbv7em-none-eabihf`, `riscv32imc-unknown-none-elf` = ESP32-C3) and WebAssembly
-(`wasm32-unknown-unknown`, `wasm32-wasip1`) targets.
+The minimum supported Rust version is 1.87. `tpt-gis-core` and `tpt-gis-geom` are
+`no_std` by default (enable the `std` feature for host-native math intrinsics). CI
+cross-compiles them for `thumbv7em-none-eabihf`, `riscv32imc-unknown-none-elf` (the
+ESP32-C3 target), `wasm32-unknown-unknown` and `wasm32-wasip1`.
+
+The workspace excludes `examples/wasm-geofence-demo`, the cargo-fuzz harnesses, and the
+Python binding; each has its own build steps in its README.
 
 ## Examples
 
-- [`examples/spatial-join-cli`](examples/spatial-join-cli) — MVP 1: a planetary-scale
-  points-in-polygons spatial join engine CLI (reproject, join, GeoJSON/CSV output,
-  throughput benchmark).
-- [`examples/drone-geofence-demo`](examples/drone-geofence-demo) — MVP 2: a real-time
-  `no_std` drone geofence / navigation engine (breach detection + escape-vector).
-- [`examples/wasm-geofence-demo`](examples/wasm-geofence-demo) — a browser/WASM demo
-  that reuses the drone geofence `check_position` logic in a `wasm-bindgen` + canvas
-  harness.
+- [`examples/spatial-join-cli`](examples/spatial-join-cli) — the spatial-join criterion
+  benchmark host, and a thin wrapper around the same subcommands as `tptgis`.
+- [`examples/drone-geofence-demo`](examples/drone-geofence-demo) — a real-time `no_std`
+  drone geofence / navigation engine (breach detection and escape vector).
+- [`examples/wasm-geofence-demo`](examples/wasm-geofence-demo) — a browser/WASM demo that
+  reuses the drone geofence `check_position` logic in a `wasm-bindgen` + canvas harness.
 
-## Crates
+## Documentation
 
-The workspace splits the engine into five crates plus a convenience facade crate
-[`tpt-gis`](tpt-gis) that re-exports them behind feature flags — most users should
-depend on `tpt-gis` rather than the individual crates. The facade also exposes a
-[`prelude`](tpt-gis/src/prelude.rs) module for one-line imports of the common types.
+- [Getting started](docs/getting-started.md) and [cookbook](docs/cookbook.md)
+- [CLI usage](docs/cli-usage.md) and [Python bindings](docs/python-bindings.md)
+- [Coming from GDAL, PROJ and GEOS](docs/coming-from-gdal-proj-geos.md)
+- [Benchmarks](docs/benchmarks.md)
 
 ## Contributing
 
