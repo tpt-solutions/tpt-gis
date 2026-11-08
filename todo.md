@@ -237,7 +237,8 @@ these are things a previous pass marked `[x]` done that don't actually work.
       `face_uv_from_xyz` on faces 3/4/5); also soften the "same ids/tokens as
       Google's S2" doc claim (it's a Z-order curve, not Hilbert — not
       bit-compatible) rather than fabricate a reference test vector
-  - [ ] (deferred, separate future pass) real Hilbert-curve/orientation-table
+  - [ ] (deferred; decided to keep Morton ids unless S2 interoperability becomes a goal)
+        real Hilbert-curve/orientation-table
         S2 compatibility + variable-length token format, if byte-compatibility
         with Google's S2 is ever actually needed
 - [x] `tpt-gis-io` fuzz harness doesn't compile — wrong dependency
@@ -511,7 +512,11 @@ the same logic, not real GDAL/QGIS/libtiff output; add third-party fixtures.
         special case), Web Mercator longitude wrapping.
       - Done: `crs::transform(p, from, to)` between WGS84, Web Mercator, UTM, Lambert-93 and
         Conus Albers, checked against PROJ on 231 pairs (worst 0.96 mm).
-      - Open: more EPSG registry entries, BNG (needs the OSTN15 grid), datum shifts.
+      - Done: OSGB36 (EPSG:4277) and the British National Grid (EPSG:27700), with the OS
+        Helmert transform to WGS84 (about 5 m). Checked against PROJ (80 rows, worst 10 mm, from
+        the Transverse Mercator series at 4° from the central meridian) and the OS worked example.
+      - Open: more EPSG registry entries; OSTN15 as an optional, user-supplied grid loader
+        (the grid is not bundled, because its licence is not MIT/Apache).
 - [x] Karney geodesics (fixes Vincenty antipodal failure) — inverse and direct, checked
       against GeographicLib. Polygon area and perimeter (`geodesic::polygon_measure`) are done,
       checked against GeographicLib's PolygonArea on 225 polygons (relative area error 7e-9
@@ -538,7 +543,9 @@ the same logic, not real GDAL/QGIS/libtiff output; add third-party fixtures.
       - Done: reading GeoPackage `WITHOUT ROWID` tables (index b-tree walk, checked against a
         sqlite3-written file). The writer still emits rowid tables, which the spec does not
         require.
-      - Open: WKT `EMPTY` (the model has no empty geometries).
+      - Decided: WKT `EMPTY` stays rejected with a clear error. The model has no empty
+        geometries, and adding one would be a breaking change for a rarely needed case. Revisit
+        if round-tripping empties is needed.
 - [x] Raster: overview IFDs and COG writer (`geotiff::write_cog`: tiled, multi-band,
       deflate, chained overviews from 2×2 means that skip nodata). Checked with GDAL
       (rasterio): tiling, overview levels, georeferencing, nodata, and every overview value.
@@ -584,8 +591,15 @@ the same logic, not real GDAL/QGIS/libtiff output; add third-party fixtures.
       bounds/area/length, `__eq__`/`__hash__`/pickle, and the exception hierarchy (done).
       Done: `coordinates()` returns vertices as a NumPy array (NumPy imported lazily);
       the shapefile readers release the GIL with `allow_threads`.
-      Open: zipped shapefile geometry+attributes (needs a zip decoder, which is a new
-      dependency decision), wheel matrix (aarch64, musllinux, universal2), classifiers
+      - Done: `read_zipped_shapefile` reads the `.shp`, `.dbf` and `.cpg` from a `.zip` with the
+        standard library's `zipfile` (no new Rust dependency), checked against a GDAL-written
+        fixture with accented names.
+      - Done: `wheels.yml` (manual dispatch) builds manylinux and musllinux x86_64, macOS
+        universal2 and Windows x64 wheels, runs the tests against each, and uploads nothing.
+        Not yet run on GitHub runners.
+      - Open: the `publish-python` job in `ci.yml` still builds only the three original targets
+        (no musllinux or universal2); align it before the next release. Linux aarch64 is not built.
+        Classifiers.
 
 ### 4.7 Docs & adoption
 - [ ] `docs/coming-from-gdal-proj-geos.md`: parity table + side-by-side with
@@ -615,7 +629,8 @@ the same logic, not real GDAL/QGIS/libtiff output; add third-party fixtures.
         fixed so the docs job passes.
       - Done: coverage (`coverage.yml`, cargo-llvm-cov, lcov kept as an artifact; 91% of lines
         with all features). Scheduled advisory and fuzz runs are in `scheduled.yml`.
-      - Open: semver checks (need a published baseline) and a Codecov upload (needs a token).
+      - Decided: no semver check until the first release, since it needs a published baseline.
+        No Codecov upload: the lcov artifact is kept instead, which needs no token.
 - [ ] `release.yml`: ordered `cargo publish`, GitHub Release with changelog extraction,
       prebuilt `tptgis` binaries, `cargo-binstall` metadata, Homebrew formula
 - [ ] Publish crates + wheels and tag a first release (nothing is on crates.io/PyPI yet;
