@@ -9,6 +9,7 @@ authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
 keywords = ["gis", "geospatial", "geo", "cli", "geodesy"]
+readme = "README.md"
 categories = ["command-line-utilities", "science::geo", "science"]
 publish = true
 
@@ -16,11 +17,11 @@ publish = true
 clap = { version = "4.5", features = ["derive"] }
 clap_complete = "4.5"
 serde_json = "1"
-tpt-gis-core = { path = "../tpt-gis-core" }
-tpt-gis-geom = { path = "../tpt-gis-geom" }
-tpt-gis-io = { path = "../tpt-gis-io" }
-tpt-gis-index = { path = "../tpt-gis-index" }
-tpt-gis-raster = { path = "../tpt-gis-raster" }
+tpt-gis-core = { path = "../tpt-gis-core", version = "0.1.0" }
+tpt-gis-geom = { path = "../tpt-gis-geom", version = "0.1.0" }
+tpt-gis-io = { path = "../tpt-gis-io", version = "0.1.0" }
+tpt-gis-index = { path = "../tpt-gis-index", version = "0.1.0" }
+tpt-gis-raster = { path = "../tpt-gis-raster", version = "0.1.0" }
 
 [dev-dependencies]
 criterion = { version = "0.8", default-features = false }

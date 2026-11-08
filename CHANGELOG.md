@@ -3,10 +3,11 @@
 Workspace-level changes for the tpt-gis engine. Per-crate changes are in each crate's own
 `CHANGELOG.md`. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-No version has been tagged or published yet (see [`todo.md`](todo.md), Phase 4.8). Everything
-below is therefore under **Unreleased**; the first release will be `0.1.0`.
+Version `0.1.0` is the first release, published to crates.io on 2026-11-09.
 
 ## [Unreleased]
+
+## [0.1.0] - 2026-11-09
 
 ### Added
 - Project templates for `cargo generate` (`templates/`: a `no_std` geofence and a CLI tool), a
@@ -70,4 +71,5 @@ below is therefore under **Unreleased**; the first release will be `0.1.0`.
 - Index: S2 ids are validated, quadtree depth is bounded, and the R-tree was extended.
 - Reprojection and join fixes in the CLI.
 
-[Unreleased]: https://github.com/tpt-solutions/tpt-gis/commits/master
+[Unreleased]: https://github.com/tpt-solutions/tpt-gis/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/tpt-solutions/tpt-gis/releases/tag/v0.1.0
