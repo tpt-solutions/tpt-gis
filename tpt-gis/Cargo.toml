@@ -9,7 +9,7 @@ authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
 readme = "README.md"
-keywords = ["gis", "geospatial", "geodesy", "geojson", "cog", "geo"]
+keywords = ["gis", "geospatial", "geodesy", "geojson", "cog"]
 categories = ["science::geo", "algorithms"]
 
 [lints]
