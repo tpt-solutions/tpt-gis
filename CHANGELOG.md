@@ -9,6 +9,13 @@ below is therefore under **Unreleased**; the first release will be `0.1.0`.
 ## [Unreleased]
 
 ### Added
+- Project templates for `cargo generate` (`templates/`: a `no_std` geofence and a CLI tool), a
+  `Dockerfile` for the `tptgis` binary, and a `.devcontainer`.
+- `docs/support-matrix.md`: formats, CRS codes, geometry operations, accuracy references and FAQ.
+- Linux aarch64 Python wheels, in the `wheels.yml` check and the PyPI publish job, which now uses
+  the same build matrix (manylinux, musllinux, aarch64, universal2, Windows).
+- Python package classifiers for Python 3.8–3.13 and the three operating systems.
+- The migration guide covers geopandas and the Rust `geo` crate, and reflects the current API.
 - `tpt-gis-core`: CRS registry (WGS84, Web Mercator, UTM, RGF93 / Lambert-93 EPSG:2154, NAD83 /
   Conus Albers EPSG:5070, OSGB36 / British National Grid EPSG:27700) with `epsg::lookup`; projections (Web Mercator, UTM, generic
   Transverse Mercator, Lambert Conformal Conic, Albers, local tangent plane); geodesics on the

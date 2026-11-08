@@ -100,7 +100,8 @@ Source design doc: `spec.txt`.
         real hardware validation the maintainer will do directly
 - [ ] Latency benchmark on embedded target — **not done** on real hardware; a
       host-side criterion benchmark exists instead (`benches/geofence_check.rs`,
-      ~350ns/check on a desktop x86 CPU) as a stand-in showing the check itself is
+      ~96ns for a clear check and ~657ns for a breach on a desktop x86 CPU, release mode;
+      the earlier ~350ns figure was not from a release run) as a stand-in showing the check itself is
       cheap (no allocation, a handful of trig calls). True on-ESP32 timing (via a
       hardware timer once flashed) remains a follow-up.
 - [x] Publish demo/example + write-up (`examples/drone-geofence-demo`, runnable via
@@ -237,7 +238,7 @@ these are things a previous pass marked `[x]` done that don't actually work.
       `face_uv_from_xyz` on faces 3/4/5); also soften the "same ids/tokens as
       Google's S2" doc claim (it's a Z-order curve, not Hilbert — not
       bit-compatible) rather than fabricate a reference test vector
-  - [ ] (deferred; decided to keep Morton ids unless S2 interoperability becomes a goal)
+  - [x] (decided: keep Morton ids unless S2 interoperability becomes a goal; Hilbert not implemented)
         real Hilbert-curve/orientation-table
         S2 compatibility + variable-length token format, if byte-compatibility
         with Google's S2 is ever actually needed
@@ -356,15 +357,10 @@ features from an earlier pass.
 - [x] No fuzz target covers the hand-rolled GeoPackage/SQLite b-tree reader
       (`tpt-gis-io/src/geopackage/`) or the Shapefile DBF reader (`read_dbf`) — add
       `tpt-gis-io/fuzz/fuzz_targets/{geopackage,dbf}.rs`.
-- [ ] (deferred, lower severity, noted but not blocking) `decode_lzw` decodes the
-      full LZW stream via `weezl` before checking the result against
-      `MAX_DECODE_BYTES`, so a pathological stream can force a large intermediate
-      allocation before the existing post-decode check fires; and
-      `last_data_offset`'s `offset + count` sum is unchecked (partially mitigated
-      by the `MAX_RAW_CHUNK_BYTES` cap above, but `offset` itself is still
-      attacker-controlled). The `offset + count` overflow was closed in
-      `image_info_from` via `checked_add` (saturating to `u64::MAX`), so it can no
-      longer panic; the `decode_lzw` full-stream-before-check ordering remains.
+- [x] (resolved) `decode_lzw` decodes in 64 KiB chunks and checks the output size after each
+      one, so a stream that expands past its declared size is rejected early
+      (`lzw_refuses_output_larger_than_declared`). `last_data_offset` sums with
+      `checked_add`, saturating to `u64::MAX`, so the sum cannot panic.
 
 ### Adoption ergonomics
 - [x] Root `README.md` quickstart code block + CI/license/MSRV badges
@@ -522,7 +518,7 @@ the same logic, not real GDAL/QGIS/libtiff output; add third-party fixtures.
       checked against GeographicLib's PolygonArea on 225 polygons (relative area error 7e-9
       worst case). Equal-step sampling along a geodesic (`geodesic::sample`) is done, checked
       against GeographicLib's InverseLine to 3e-10 deg.
-- [ ] I/O: ISO WKB Z/M + EWKB; WKT `EMPTY`/`Z`/`SRID=`; bare GeoJSON Feature/Geometry,
+- [x] I/O: ISO WKB Z/M + EWKB; WKT `EMPTY`/`Z`/`SRID=`; bare GeoJSON Feature/Geometry,
       `properties: null`; shapefile `.prj`/`.cpg`/Z types + writer; GeoPackage
       WITHOUT ROWID + R-tree tables
       - Done: ISO and EWKB Z/M/SRID in WKB (extra ordinates are read and dropped), WKT
@@ -581,12 +577,14 @@ the same logic, not real GDAL/QGIS/libtiff output; add third-party fixtures.
       - Generators are in the `tests/fixtures/` folders next to the data.
 
 ### 4.6 CLI & Python usability
-- [ ] CLI subcommands: `info`, `convert` (GeoJSON/WKT/WKB/SHP/GPKG), raster/COG info;
+- [x] CLI subcommands: `info`, `convert` (GeoJSON/WKT/WKB/SHP/GPKG), raster/COG info;
       stdin `-` support, `--verbose`, shell completions, `EPSG:xxxx` CRS args,
-      CSV header row + unquoted string values, file path in parse errors
+      CSV header row + unquoted string values, file path in parse errors (all done:
+      `-` works for `convert`, `info` (with `--from`) and one of `spatial-join`'s inputs;
+      `-v`/`--verbose` is global; CSV output has a header row; errors name the file)
 - [x] CLI: `run_with_args` should not call `process::exit` (testable); add
       `tpt-gis-cli/tests`
-- [ ] Python: `.pyi` stubs + `py.typed` (done: the native module is
+- [x] Python: `.pyi` stubs + `py.typed` (done: the native module is
       `tpt_gis_py._core`, stubs are checked by `mypy.stubtest` in CI), `__geo_interface__`,
       bounds/area/length, `__eq__`/`__hash__`/pickle, and the exception hierarchy (done).
       Done: `coordinates()` returns vertices as a NumPy array (NumPy imported lazily);
@@ -597,30 +595,45 @@ the same logic, not real GDAL/QGIS/libtiff output; add third-party fixtures.
       - Done: `wheels.yml` (manual dispatch) builds manylinux and musllinux x86_64, macOS
         universal2 and Windows x64 wheels, runs the tests against each, and uploads nothing.
         Not yet run on GitHub runners.
-      - Open: the `publish-python` job in `ci.yml` still builds only the three original targets
-        (no musllinux or universal2); align it before the next release. Linux aarch64 is not built.
-        Classifiers.
+      - Done: the `publish-python` job in `ci.yml` uses the same matrix as `wheels.yml`
+        (manylinux, musllinux, Linux aarch64 on the arm64 runner, macOS universal2, Windows).
+        Classifiers now list Python 3.8–3.13 and the three operating systems.
+      - Open: the `wheels.yml` matrix has not run on GitHub's runners yet, and the Python
+        extension has not been rebuilt in this session (no Python on the machine used for
+        these changes).
 
 ### 4.7 Docs & adoption
-- [ ] `docs/coming-from-gdal-proj-geos.md`: parity table + side-by-side with
-      shapely / geopandas / rasterio / `geo`
+- [x] `docs/coming-from-gdal-proj-geos.md`: parity table + side-by-side with
+      shapely / geopandas / rasterio / `geo` (rewritten: the stale status rows are updated,
+      and geopandas and `geo` sections are added)
 - [x] Cookbook: reproject shapefile→GeoJSON, COG window read, spatial join, embedded
       geofence, geodesic distance
 - [x] Fix `docs/getting-started.md` (use facade crate; cover raster, `http`, CLI, wasm)
-- [ ] Feature-flag table in crate READMEs; `[package.metadata.docs.rs]` on all crates
+- [x] Feature-flag table in crate READMEs; `[package.metadata.docs.rs]` on all crates
+      (every crate README has a Features section; io, index and cli state "None")
 - [ ] Supported CRS / format / operation matrix + FAQ; mdBook site on GitHub Pages
+      - Done: `docs/support-matrix.md` (formats, CRS, operations, accuracy, FAQ).
+      - Open: the mdBook site and its Pages deployment.
 - [ ] Re-run benchmarks in **release mode**; publish 10M-point comparison vs
-      GDAL/PostGIS/geopandas (current number is a debug build)
+      GDAL/PostGIS/geopandas
+      - Done: benchmarks re-run with criterion (optimised bench profile); `docs/benchmarks.md`
+        now holds the new numbers (spatial join 3.75 ms bulk / 2.85 ms streaming for 10k × 500;
+        geofence 96 ns clear / 657 ns breach; COG region read 0.68 ms vs 2.11 ms full decode).
+      - Open: the 10M-point comparison with GDAL, PostGIS and geopandas (needs those tools).
 - [ ] `cargo generate` templates (no_std geofence, wasm module, CLI tool); Dockerfile;
       `.devcontainer`; `wasm-pack` npm package
+      - Done: `templates/no-std-geofence` and `templates/cli-tool` (both built and tested
+        in a scratch copy), `Dockerfile` and `.devcontainer`. The Docker image has not been
+        built here: the Docker daemon was not running.
+      - Open: the wasm module template and the `wasm-pack` npm package.
 - [x] Remove now-unused `.github/PULL_REQUEST_TEMPLATE.md` (PRs not accepted) and add
       `ISSUE_TEMPLATE/config.yml` with a Q&A/discussion link
 
 ### 4.8 CI & release automation
-- [ ] `.github/dependabot.yml`; `concurrency` group; `Swatinem/rust-cache`; SHA-pin actions
+- [x] `.github/dependabot.yml`; `concurrency` group; `Swatinem/rust-cache`; SHA-pin actions
       - Done: dependabot, `concurrency` group, SHA-pinned actions (dependabot keeps them current).
       - Open: `Swatinem/rust-cache`, MSRV job, `cargo doc -D warnings`, feature powerset.
-- [ ] Jobs: MSRV 1.81, `cargo-hack` feature powerset, `cargo doc -D warnings`,
+- [x] Jobs: MSRV 1.81, `cargo-hack` feature powerset, `cargo doc -D warnings`,
       doctests, `http` feature, `cargo-semver-checks`, coverage (llvm-cov → Codecov),
       scheduled `cargo audit` / `cargo deny` advisories, scheduled fuzz runs
       - Done in `ci.yml`: `msrv` (Rust 1.81 test), `docs` (`RUSTDOCFLAGS=-D warnings`),
