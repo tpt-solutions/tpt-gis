@@ -1,0 +1,13 @@
+{
+  "name": "tpt-gis",
+  "image": "mcr.microsoft.com/devcontainers/rust:1-bookworm",
+  "features": {
+    "ghcr.io/devcontainers/features/python:1": { "version": "3.11" }
+  },
+  "postCreateCommand": "rustup target add thumbv7em-none-eabihf riscv32imc-unknown-none-elf wasm32-unknown-unknown wasm32-wasip1",
+  "customizations": {
+    "vscode": {
+      "extensions": ["rust-lang.rust-analyzer", "tamasfe.even-better-toml"]
+    }
+  }
+}

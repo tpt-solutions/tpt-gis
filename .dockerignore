@@ -1,0 +1,6 @@
+target/
+**/target/
+.git/
+.github/
+bindings/tpt-gis-py/target/
+**/*.log
